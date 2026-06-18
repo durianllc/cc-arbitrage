@@ -25,7 +25,7 @@ import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { launchContext } from './browser.mjs'
 import { lookupCardLadder, checkSession } from './cardladder.mjs'
 import { scrapeCards } from './collectorcrypt.mjs'
-import { postBuysToDiscord, postMessageToDiscord } from './discord.mjs'
+import { postBuysToDiscord } from './discord.mjs'
 
 // Public Collector Crypt buy page for a listing (verified pattern, 2026-06).
 const ccUrl = (nftAddress) => `https://collectorcrypt.com/assets/solana/${nftAddress}`
@@ -43,7 +43,7 @@ const GRADER_MAP = {
 }
 
 function parseArgs(argv) {
-  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 2, delay: 800, profiles: 5, retries: 2, categories: ['Pokemon', 'One Piece'] }
+  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 2, delay: 800, profiles: 5, categories: ['Pokemon', 'One Piece'] }
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i]
     if (k === '--limit') a.limit = Number(argv[++i])
@@ -52,7 +52,6 @@ function parseArgs(argv) {
     else if (k === '--concurrency') a.concurrency = Math.max(1, Number(argv[++i]))
     else if (k === '--delay') a.delay = Math.max(0, Number(argv[++i]))
     else if (k === '--profiles') a.profiles = Math.max(1, Number(argv[++i]))
-    else if (k === '--retries') a.retries = Math.max(0, Number(argv[++i]))
     else if (k === '--categories') a.categories = argv[++i].split(',').map(s => s.trim())
   }
   return a
@@ -92,13 +91,6 @@ async function main() {
 
   const targets = eligible.slice(0, args.limit)
   if (targets.length < eligible.length) console.log(`Limiting to first ${targets.length} (priciest).`)
-
-  // Startup ping so you can confirm the webhook is wired up correctly.
-  const ok = await postMessageToDiscord(
-    `🚀 **Starting arbitrage run** — scanning ${targets.length} cards (${args.categories.join(', ')}). BUY alerts at ≤${(args.threshold * 100).toFixed(0)}% of CL value will post here.`,
-    (m) => console.log(m),
-  )
-  if (ok) console.log('Sent "starting" ping to Discord.')
 
   // ── 3. Card Ladder lookups (proxy fleet × tab pool, checkpointed) ────────
   const cache = loadCache()
@@ -160,47 +152,25 @@ async function main() {
       if (i >= todo.length) break
       const c = todo[i]
       const key = `${c.gradingID}|${c.grader}`
-      // Retry transient misses (a throttled account often returns nothing within
-      // the wait window even though the card exists). AUTH/Cloudflare are handled
-      // separately. Each retry backs off a bit longer to let the throttle ease.
-      let lastErr
-      let resolved = false
-      for (let attempt = 0; attempt <= args.retries; attempt++) {
-        if (attempt > 0) await sleep(attempt * 4000)
-        try {
-          const { value, cardName, url, matchedBy } = await lookupCardLadder(page, {
-            certNumber: c.gradingID, grader: c.grader,
-            itemName: c.itemName, year: c.year, gradeNum: c.gradeNum,
-          })
-          cache[key] = { clValue: value, clName: cardName, clUrl: url, matchedBy: matchedBy ?? 'cert' }
-          const tag = attempt > 0 ? ` (retry ${attempt})` : ''
-          const via = matchedBy === 'name' ? ' ~name' : ''
-          const disc = ((1 - c.price / value) * 100).toFixed(0)
-          const deal = c.price <= args.threshold * value ? ' 🔥BUY' : ''
-          console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CC $${c.price} vs CL $${value} (${disc}% off)${deal}${via}${tag} — ${c.itemName.slice(0, 40)}`)
-          resolved = true
+      try {
+        const { value, cardName, url } = await lookupCardLadder(page, { certNumber: c.gradingID, grader: c.grader })
+        cache[key] = { clValue: value, clName: cardName, clUrl: url }
+        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CL $${value} — ${c.itemName.slice(0, 45)}`)
+      } catch (e) {
+        if (e.code === 'AUTH_REQUIRED') {
+          // Only this profile's session died — stop its tabs, let others run on.
+          console.warn(`${wid}: session expired — stopping this profile.`)
+          profile.dead = true
           break
-        } catch (e) {
-          lastErr = e
-          if (e.code === 'AUTH_REQUIRED') {
-            console.warn(`${wid}: session expired — stopping this profile.`)
-            profile.dead = true
-            resolved = true // not a value, but don't fall through to cache-as-failure
-            break
-          }
-          if (e.code === 'CLOUDFLARE_BLOCK') {
-            console.log(`[${done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CLOUDFLARE BLOCK, backing off 30s`)
-            await sleep(30_000)
-            attempt-- // a block doesn't burn a retry; try this card again
-            continue
-          }
-          // "no value" — fall through to retry loop
         }
-      }
-      if (lastErr?.code === 'AUTH_REQUIRED') break
-      if (!resolved) {
-        cache[key] = { clValue: null, error: lastErr?.message }
-        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — no value after ${args.retries + 1} tries (${(lastErr?.message ?? '').slice(0, 35)})`)
+        if (e.code === 'CLOUDFLARE_BLOCK') {
+          // Transient — don't cache as failure; back off so this IP cools down.
+          console.log(`[${done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CLOUDFLARE BLOCK, backing off 30s`)
+          await sleep(30_000)
+          continue
+        }
+        cache[key] = { clValue: null, error: e.message }
+        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — no value (${e.message.slice(0, 40)})`)
       }
       saveCache(cache) // checkpoint after every lookup so a crash loses nothing
       if (args.delay) await sleep(args.delay) // pace requests per tab
@@ -228,7 +198,6 @@ async function main() {
       pct_of_cl: ratio,                        // cc ÷ cl
       discount_pct: 1 - ratio,                 // how far under market (for sorting)
       buy_flag: ratio <= args.threshold ? 'BUY' : '',
-      matched_by: hit.matchedBy ?? 'cert',
       nft_address: c.nftAddress,
       cc_url: ccUrl(c.nftAddress),
       cl_url: hit.clUrl ?? '',
@@ -236,12 +205,12 @@ async function main() {
   }
   rows.sort((a, b) => b.discount_pct - a.discount_pct) // best deals first
 
-  const header = ['name', 'category', 'grader', 'grade', 'cc_price', 'card_ladder_value', 'pct_discrepancy', 'discount_pct', 'buy_flag', 'matched_by', 'cc_url', 'cl_url', 'nft_address']
+  const header = ['name', 'category', 'grader', 'grade', 'cc_price', 'card_ladder_value', 'pct_discrepancy', 'discount_pct', 'buy_flag', 'cc_url', 'cl_url', 'nft_address']
   const lines = [header.join(',')]
   for (const r of rows) {
     lines.push([
       r.name, r.category, r.grader, r.grade, r.cc_price, r.card_ladder_value,
-      r.pct_of_cl.toFixed(4), (r.discount_pct * 100).toFixed(1) + '%', r.buy_flag, r.matched_by, r.cc_url, r.cl_url, r.nft_address,
+      r.pct_of_cl.toFixed(4), (r.discount_pct * 100).toFixed(1) + '%', r.buy_flag, r.cc_url, r.cl_url, r.nft_address,
     ].map(csvCell).join(','))
   }
   writeFileSync(CSV_FILE, lines.join('\n'))
