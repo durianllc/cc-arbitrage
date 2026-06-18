@@ -1,0 +1,6 @@
+node_modules/
+browser-state-context/
+*-context/
+cache.json
+results.csv
+.env

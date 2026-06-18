@@ -1,0 +1,19 @@
+{
+  "name": "cc-arbitrage",
+  "version": "0.1.0",
+  "description": "Scrape Collector Crypt marketplace cards, cross-reference Card Ladder values, and surface arbitrage opportunities to a CSV.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "login": "node login.mjs",
+    "start": "node run.mjs",
+    "install-browsers": "playwright install chromium"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.49.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
