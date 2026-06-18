@@ -43,7 +43,7 @@ const GRADER_MAP = {
 }
 
 function parseArgs(argv) {
-  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 2, delay: 800, profiles: 5, categories: ['Pokemon', 'One Piece'] }
+  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 2, delay: 800, profiles: 5, retries: 2, categories: ['Pokemon', 'One Piece'] }
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i]
     if (k === '--limit') a.limit = Number(argv[++i])
@@ -52,6 +52,7 @@ function parseArgs(argv) {
     else if (k === '--concurrency') a.concurrency = Math.max(1, Number(argv[++i]))
     else if (k === '--delay') a.delay = Math.max(0, Number(argv[++i]))
     else if (k === '--profiles') a.profiles = Math.max(1, Number(argv[++i]))
+    else if (k === '--retries') a.retries = Math.max(0, Number(argv[++i]))
     else if (k === '--categories') a.categories = argv[++i].split(',').map(s => s.trim())
   }
   return a
@@ -152,25 +153,41 @@ async function main() {
       if (i >= todo.length) break
       const c = todo[i]
       const key = `${c.gradingID}|${c.grader}`
-      try {
-        const { value, cardName, url } = await lookupCardLadder(page, { certNumber: c.gradingID, grader: c.grader })
-        cache[key] = { clValue: value, clName: cardName, clUrl: url }
-        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CL $${value} — ${c.itemName.slice(0, 45)}`)
-      } catch (e) {
-        if (e.code === 'AUTH_REQUIRED') {
-          // Only this profile's session died — stop its tabs, let others run on.
-          console.warn(`${wid}: session expired — stopping this profile.`)
-          profile.dead = true
+      // Retry transient misses (a throttled account often returns nothing within
+      // the wait window even though the card exists). AUTH/Cloudflare are handled
+      // separately. Each retry backs off a bit longer to let the throttle ease.
+      let lastErr
+      let resolved = false
+      for (let attempt = 0; attempt <= args.retries; attempt++) {
+        if (attempt > 0) await sleep(attempt * 4000)
+        try {
+          const { value, cardName, url } = await lookupCardLadder(page, { certNumber: c.gradingID, grader: c.grader })
+          cache[key] = { clValue: value, clName: cardName, clUrl: url }
+          const tag = attempt > 0 ? ` (retry ${attempt})` : ''
+          console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CL $${value}${tag} — ${c.itemName.slice(0, 45)}`)
+          resolved = true
           break
+        } catch (e) {
+          lastErr = e
+          if (e.code === 'AUTH_REQUIRED') {
+            console.warn(`${wid}: session expired — stopping this profile.`)
+            profile.dead = true
+            resolved = true // not a value, but don't fall through to cache-as-failure
+            break
+          }
+          if (e.code === 'CLOUDFLARE_BLOCK') {
+            console.log(`[${done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CLOUDFLARE BLOCK, backing off 30s`)
+            await sleep(30_000)
+            attempt-- // a block doesn't burn a retry; try this card again
+            continue
+          }
+          // "no value" — fall through to retry loop
         }
-        if (e.code === 'CLOUDFLARE_BLOCK') {
-          // Transient — don't cache as failure; back off so this IP cools down.
-          console.log(`[${done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CLOUDFLARE BLOCK, backing off 30s`)
-          await sleep(30_000)
-          continue
-        }
-        cache[key] = { clValue: null, error: e.message }
-        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — no value (${e.message.slice(0, 40)})`)
+      }
+      if (lastErr?.code === 'AUTH_REQUIRED') break
+      if (!resolved) {
+        cache[key] = { clValue: null, error: lastErr?.message }
+        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — no value after ${args.retries + 1} tries (${(lastErr?.message ?? '').slice(0, 35)})`)
       }
       saveCache(cache) // checkpoint after every lookup so a crash loses nothing
       if (args.delay) await sleep(args.delay) // pace requests per tab
