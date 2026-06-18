@@ -30,6 +30,20 @@ import { chromium } from 'playwright'
 
 export const CARD_LADDER_BASE = process.env.CARD_LADDER_BASE ?? 'https://app.cardladder.com'
 
+// Optional residential proxy — set PROXY_SERVER (and optionally PROXY_USERNAME /
+// PROXY_PASSWORD) in .env to route all browser traffic through it.
+// Recommended when running on a server whose IP Cloudflare flags.
+// Format: http://host:port  or  socks5://host:port
+function proxyOpts() {
+  const server = process.env.PROXY_SERVER
+  if (!server) return {}
+  const proxy = { server }
+  if (process.env.PROXY_USERNAME) proxy.username = process.env.PROXY_USERNAME
+  if (process.env.PROXY_PASSWORD) proxy.password = process.env.PROXY_PASSWORD
+  console.log(`[browser] using proxy: ${server}`)
+  return { proxy }
+}
+
 function baseOpts(headless, userAgent) {
   return {
     headless,
@@ -37,6 +51,7 @@ function baseOpts(headless, userAgent) {
     ignoreDefaultArgs: ['--enable-automation'],
     args: ['--disable-blink-features=AutomationControlled'],
     ...(userAgent ? { userAgent } : {}),
+    ...proxyOpts(),
   }
 }
 
