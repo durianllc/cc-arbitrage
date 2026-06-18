@@ -101,59 +101,112 @@ export async function lookupCardLadder(page, args) {
   // Submit the cert search.
   await page.locator('button[type="submit"]:visible').click()
 
-  // Read the CL value — the .value div immediately after the Card Ladder logo,
-  // which separates it from sale-row prices (those sit under a "Price" label).
+  try {
+    return await readClValue(page, `cert ${cert} / ${clGrader}`)
+  } catch (e) {
+    // FALLBACK: the cert isn't indexed on Card Ladder (0 results) but the card's
+    // PROFILE almost always exists — search by name + grade to get its CL value.
+    if (e.code === 'NO_MATCH' && args.itemName) {
+      return await searchByName(page, { ...args, clGrader })
+    }
+    throw e
+  }
+}
+
+/**
+ * Fallback lookup by card name + grade when the cert isn't on Card Ladder.
+ * Best-effort: uses the main "Search listing titles" box + the Grade/Grader
+ * filters. Returns { value, cardName, url, matchedBy: 'name' }.
+ */
+async function searchByName(page, { itemName, gradeNum, grader, clGrader }) {
+  clGrader = clGrader ?? CL_GRADER[grader]
+  // Strip grading noise so the query is just the card identity.
+  const query = String(itemName)
+    .replace(/\b(PSA|BGS|BECKETT|CGC|SGC)\b\s*\d*(\.\d)?/gi, ' ')
+    .replace(/\b(GEM[- ]?MT|MINT|NM[-+]?)\b/gi, ' ')
+    .replace(/\s+/g, ' ').trim()
+
+  await page.goto(SALES_URL, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(2500)
+  if (/\/login(\?|$)/i.test(page.url())) throw authRequiredError()
+
+  // Type the card name into the main search box (several selector fallbacks).
+  const search = page.locator(
+    'input[placeholder*="Search listing" i]:visible, input[placeholder*="Search" i]:visible'
+  ).first()
+  await search.waitFor({ state: 'visible', timeout: 15_000 })
+  await search.fill(query)
+  await search.press('Enter')
+  await page.waitForTimeout(2500)
+
+  // Set the Grader filter.
+  await setFilter(page, 'Grader', clGrader)
+  // Set the Grade filter to the slab's numeric grade (e.g. "10", "9.5").
+  if (gradeNum != null) await setFilter(page, 'Grade', String(gradeNum))
+  await page.waitForTimeout(1500)
+
+  const res = await readClValue(page, `name "${query.slice(0, 40)}" / ${clGrader} ${gradeNum ?? ''}`)
+  return { ...res, matchedBy: 'name' }
+}
+
+/** Click a labelled dropdown filter (e.g. "Grader"/"Grade") and pick a value. */
+async function setFilter(page, label, value) {
+  try {
+    const control = page.locator(`div.input:has(label:text-is("${label}"))`).first()
+    const current = (await control.locator('.value').first().textContent().catch(() => '') ?? '').trim().toUpperCase()
+    if (current === value.toUpperCase()) return
+    await control.click()
+    await page.waitForTimeout(400)
+    await page.locator('li:visible')
+      .filter({ hasText: new RegExp(`^\\s*${value.replace(/[.]/g, '\\.')}\\s*$`, 'i') })
+      .first()
+      .click()
+    await page.waitForTimeout(300)
+  } catch {
+    // Non-fatal — if the filter control isn't found we still try to read a value.
+  }
+}
+
+/**
+ * Wait for and read the "CL Value" off the current results page. Throws coded
+ * errors describing WHY if it's not there:
+ *   AUTH_REQUIRED | CLOUDFLARE_BLOCK | NO_MATCH (0 results) | SELECTOR_DRIFT
+ * Returns { value, cardName, url }.
+ */
+async function readClValue(page, ctxLabel) {
+  // The .value div immediately after the Card Ladder logo (sale-row prices sit
+  // under a "Price" label, so this selector won't grab those).
   const valueLoc = page.locator('div.value-logo + div.value:visible').first()
   try {
     await valueLoc.waitFor({ state: 'visible', timeout: 30_000 })
   } catch {
-    // Figure out WHY the value didn't appear, so failures are actionable instead
-    // of a generic "no value". Inspect the live page state.
     const diag = await page.evaluate(() => {
       const t = (document.body?.innerText || '').replace(/\s+/g, ' ')
       const cf = /verify you are human|verifying you are human|needs to review the security|cf-challenge|just a moment/i.test(t)
       const m = t.match(/([\d,]+)\s+results?/i)
-      return {
-        cf,
-        url: location.href,
-        results: m ? m[1] : null,
-        snippet: t.slice(0, 160),
-      }
+      return { cf, url: location.href, results: m ? m[1] : null, snippet: t.slice(0, 160) }
     }).catch(() => ({}))
 
-    // Logged-out session that didn't bounce to /login until after submit.
     if (/\/login(\?|$)/i.test(diag.url || '')) throw authRequiredError()
-
     if (diag.cf) {
       const e = new Error('Cloudflare challenge — request was blocked (rate-limited / flagged IP).')
-      e.code = 'CLOUDFLARE_BLOCK'
-      throw e
+      e.code = 'CLOUDFLARE_BLOCK'; throw e
     }
-    // Search returned an explicit "0 results" → the card genuinely isn't on CL.
     if (diag.results === '0') {
-      throw new Error(`No Card Ladder match (0 results) for cert ${cert} / ${clGrader}.`)
+      const e = new Error(`No Card Ladder match (0 results) for ${ctxLabel}.`)
+      e.code = 'NO_MATCH'; throw e
     }
-    // Results loaded but the value selector missed → likely UI drift.
-    if (diag.results && diag.results !== '0') {
-      const e = new Error(`Found ${diag.results} results but couldn't read the CL value — page layout may have changed.`)
-      e.code = 'SELECTOR_DRIFT'
-      throw e
+    if (diag.results) {
+      const e = new Error(`Found ${diag.results} results but couldn't read the CL value — layout may have changed.`)
+      e.code = 'SELECTOR_DRIFT'; throw e
     }
-    // Nothing rendered at all → throttle / slow load / not really logged in.
     throw new Error(`No results rendered (throttled or session invalid?). Page: "${(diag.snippet || '').slice(0, 80)}"`)
   }
+
   const raw = (await valueLoc.textContent()) ?? ''
   const value = parseMoney(raw)
-  if (value == null) {
-    throw new Error(`Card Ladder returned no parseable value (saw "${raw.trim()}")`)
-  }
+  if (value == null) throw new Error(`Card Ladder returned no parseable value (saw "${raw.trim()}")`)
 
-  const url = page.url()
-
-  // Best-effort card name: the results header reads
-  //   "N results · Grade: 10, Grader: PSA, Profile: <card name> (Pop N)".
-  // Pick the SMALLEST element that contains both "Profile:" and "(Pop" so we
-  // grab the header line, not a parent container or the profileId slug.
   const cardName = await page.evaluate(() => {
     let best = null
     for (const el of document.querySelectorAll('div, p, span, h1, h2, h3, h4')) {
@@ -166,7 +219,7 @@ export async function lookupCardLadder(page, args) {
     return m ? m[1].trim().slice(0, 200) : null
   }).catch(() => null)
 
-  return { value, cardName, url }
+  return { value, cardName, url: page.url() }
 }
 
 /** "$1,375.00" → 1375; "—"/"n/a"/"$0"/negatives → null (bad scrape, not $0). */
