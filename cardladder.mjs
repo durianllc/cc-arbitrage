@@ -104,9 +104,11 @@ export async function lookupCardLadder(page, args) {
   try {
     return await readClValue(page, `cert ${cert} / ${clGrader}`)
   } catch (e) {
-    // FALLBACK: the cert isn't indexed on Card Ladder (0 results) but the card's
-    // PROFILE almost always exists — search by name + grade to get its CL value.
-    if (e.code === 'NO_MATCH' && args.itemName) {
+    // FALLBACK: the cert isn't indexed on Card Ladder but the card's PROFILE
+    // almost always exists — search by name + grade to get its CL value.
+    // Trigger on an empty cert result (NO_MATCH = explicit "no results", or
+    // NO_RENDER = nothing rendered, which is what an unindexed cert produces).
+    if ((e.code === 'NO_MATCH' || e.code === 'NO_RENDER') && args.itemName) {
       return await searchByName(page, { ...args, clGrader })
     }
     throw e
@@ -183,8 +185,9 @@ async function readClValue(page, ctxLabel) {
     const diag = await page.evaluate(() => {
       const t = (document.body?.innerText || '').replace(/\s+/g, ' ')
       const cf = /verify you are human|verifying you are human|needs to review the security|cf-challenge|just a moment/i.test(t)
+      const noMatch = /no results|no sales|no matching|couldn't find|0 results/i.test(t)
       const m = t.match(/([\d,]+)\s+results?/i)
-      return { cf, url: location.href, results: m ? m[1] : null, snippet: t.slice(0, 160) }
+      return { cf, noMatch, url: location.href, results: m ? m[1] : null, snippet: t.slice(0, 160) }
     }).catch(() => ({}))
 
     if (/\/login(\?|$)/i.test(diag.url || '')) throw authRequiredError()
@@ -192,15 +195,18 @@ async function readClValue(page, ctxLabel) {
       const e = new Error('Cloudflare challenge — request was blocked (rate-limited / flagged IP).')
       e.code = 'CLOUDFLARE_BLOCK'; throw e
     }
-    if (diag.results === '0') {
-      const e = new Error(`No Card Ladder match (0 results) for ${ctxLabel}.`)
+    if (diag.results === '0' || diag.noMatch) {
+      const e = new Error(`No Card Ladder match for ${ctxLabel}.`)
       e.code = 'NO_MATCH'; throw e
     }
     if (diag.results) {
       const e = new Error(`Found ${diag.results} results but couldn't read the CL value — layout may have changed.`)
       e.code = 'SELECTOR_DRIFT'; throw e
     }
-    throw new Error(`No results rendered (throttled or session invalid?). Page: "${(diag.snippet || '').slice(0, 80)}"`)
+    // Nothing rendered — for a cert search this is what an unindexed cert looks
+    // like (no results header at all). Coded so the name fallback can kick in.
+    const e = new Error(`No results rendered for ${ctxLabel} (unindexed cert, throttle, or invalid session). Page: "${(diag.snippet || '').slice(0, 70)}"`)
+    e.code = 'NO_RENDER'; throw e
   }
 
   const raw = (await valueLoc.textContent()) ?? ''
