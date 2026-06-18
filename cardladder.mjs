@@ -107,6 +107,17 @@ export async function lookupCardLadder(page, args) {
   try {
     await valueLoc.waitFor({ state: 'visible', timeout: 30_000 })
   } catch {
+    // Distinguish a Cloudflare block (transient — should be retried/backed off)
+    // from a genuine no-result. A challenge replaces the SPA with its own page.
+    const blocked = await page.evaluate(() => {
+      const t = document.body?.innerText || ''
+      return /verify you are human|verifying you are human|needs to review the security|cf-challenge|just a moment/i.test(t)
+    }).catch(() => false)
+    if (blocked) {
+      const e = new Error('Cloudflare challenge — request was blocked (rate-limited / flagged IP).')
+      e.code = 'CLOUDFLARE_BLOCK'
+      throw e
+    }
     throw new Error('No Card Ladder value found — double-check the cert number and that the grader is correct.')
   }
   const raw = (await valueLoc.textContent()) ?? ''

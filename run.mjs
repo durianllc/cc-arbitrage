@@ -130,9 +130,16 @@ async function main() {
         cache[key] = { clValue: value, clName: cardName, clUrl: url }
         console.log(`[${++done}/${todo.length}] w${workerId} ${c.grader} ${c.gradingID} — CL $${value} — ${c.itemName.slice(0, 50)}`)
       } catch (e) {
-        cache[key] = { clValue: null, error: e.message }
-        console.log(`[${++done}/${todo.length}] w${workerId} ${c.grader} ${c.gradingID} — no value (${e.code ?? e.message.slice(0, 40)})`)
         if (e.code === 'AUTH_REQUIRED') { aborted = true; break } // session died; stop all workers
+        if (e.code === 'CLOUDFLARE_BLOCK') {
+          // Transient — DON'T cache as a failure (so a later re-run retries it),
+          // just back off to let Cloudflare cool down before the next lookup.
+          console.log(`[${done}/${todo.length}] w${workerId} ${c.grader} ${c.gradingID} — CLOUDFLARE BLOCK, backing off 30s`)
+          await sleep(30_000)
+          continue
+        }
+        cache[key] = { clValue: null, error: e.message }
+        console.log(`[${++done}/${todo.length}] w${workerId} ${c.grader} ${c.gradingID} — no value (${e.message.slice(0, 40)})`)
       }
       saveCache(cache) // checkpoint after every lookup so a crash loses nothing
       if (args.delay) await sleep(args.delay) // pace requests to stay under Cloudflare's radar
