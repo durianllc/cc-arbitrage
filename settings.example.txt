@@ -3,3 +3,9 @@
 
 # Discord webhook — Server Settings → Integrations → Webhooks → New Webhook → Copy URL
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/XXXX/YYYY
+
+# Card Ladder credentials — pre-filled into the login window by `node login.mjs`.
+# You still clear the Cloudflare / 2FA human-check and submit (that can't be
+# automated). Used by `--profile N` and `--all` too. Kept local (gitignored).
+CL_EMAIL=you@example.com
+CL_PASSWORD=your-password
