@@ -48,6 +48,24 @@ async function postBatch(embeds) {
   }
 }
 
+/** Send a plain text message to the webhook (used for status pings). */
+export async function postMessageToDiscord(content, log = () => {}) {
+  if (!WEBHOOK) {
+    log('DISCORD_WEBHOOK_URL not set — skipping Discord message.')
+    return false
+  }
+  const res = await fetch(WEBHOOK, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  if (!res.ok) {
+    log(`Discord webhook error ${res.status}: ${await res.text().catch(() => '')}`)
+    return false
+  }
+  return true
+}
+
 /**
  * @param {Array} buys rows with { name, cc_url, cl_url, grader, grade, category, cc_price, card_ladder_value, discount_pct }
  * @param {(msg: string) => void} [log]

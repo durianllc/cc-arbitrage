@@ -25,7 +25,7 @@ import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { launchContext } from './browser.mjs'
 import { lookupCardLadder, checkSession } from './cardladder.mjs'
 import { scrapeCards } from './collectorcrypt.mjs'
-import { postBuysToDiscord } from './discord.mjs'
+import { postBuysToDiscord, postMessageToDiscord } from './discord.mjs'
 
 // Public Collector Crypt buy page for a listing (verified pattern, 2026-06).
 const ccUrl = (nftAddress) => `https://collectorcrypt.com/assets/solana/${nftAddress}`
@@ -92,6 +92,13 @@ async function main() {
 
   const targets = eligible.slice(0, args.limit)
   if (targets.length < eligible.length) console.log(`Limiting to first ${targets.length} (priciest).`)
+
+  // Startup ping so you can confirm the webhook is wired up correctly.
+  const ok = await postMessageToDiscord(
+    `🚀 **Starting arbitrage run** — scanning ${targets.length} cards (${args.categories.join(', ')}). BUY alerts at ≤${(args.threshold * 100).toFixed(0)}% of CL value will post here.`,
+    (m) => console.log(m),
+  )
+  if (ok) console.log('Sent "starting" ping to Discord.')
 
   // ── 3. Card Ladder lookups (proxy fleet × tab pool, checkpointed) ────────
   const cache = loadCache()
