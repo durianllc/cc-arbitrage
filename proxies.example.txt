@@ -1,0 +1,20 @@
+# Rename to proxies.txt — ONE proxy per line. Each line = one browser profile
+# that runs in parallel (its own IP, its own Cloudflare clearance, its own login).
+#
+# IMPORTANT: each proxy must give a STICKY/static IP (not rotating-per-request),
+# because Cloudflare ties your login's clearance cookie to the IP that earned it.
+#
+# Same line formats as proxy.txt:
+#   http://user:pass@host:port
+#   host:port:user:pass
+#   socks5://host:port
+#
+# Then log in EACH profile once, through its proxy:
+#   node login.mjs --profile 0
+#   node login.mjs --profile 1
+#   ...one per line above (0-indexed). Then run:  node run.mjs
+#
+# START WITH ONE LINE. Confirm it returns real values before adding more.
+
+host1:port:user:pass
+host2:port:user:pass

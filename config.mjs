@@ -56,6 +56,28 @@ if (existsSync('proxy.txt')) {
   }
 }
 
+/**
+ * The proxy fleet, parsed from proxies.txt (one proxy per line). Each profile
+ * in a multi-proxy run gets its own entry + its own logged-in browser profile.
+ * Falls back to a single PROXY_SERVER (from proxy.txt / env) if proxies.txt is
+ * absent, or an empty list for a direct connection.
+ */
+export const PROXIES = (() => {
+  if (existsSync('proxies.txt')) {
+    return readFileSync('proxies.txt', 'utf8')
+      .split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))
+      .map(parseProxy).filter(Boolean)
+  }
+  if (process.env.PROXY_SERVER) {
+    return [{
+      server: process.env.PROXY_SERVER,
+      username: process.env.PROXY_USERNAME || undefined,
+      password: process.env.PROXY_PASSWORD || undefined,
+    }]
+  }
+  return []
+})()
+
 function parseProxy(line) {
   let scheme = 'http'
   let rest = line

@@ -17,16 +17,35 @@
  * sentinels (and the process exit) to drive the UI.
  */
 
-import './config.mjs'
+import { PROXIES } from './config.mjs'
 import { launchContext, CARD_LADDER_BASE } from './browser.mjs'
 
 const BROWSER_CONTEXT_DIR = process.env.BROWSER_CONTEXT_DIR ?? './browser-state-context'
 const LOGIN_URL = process.env.CARD_LADDER_LOGIN_URL ?? `${CARD_LADDER_BASE}/login`
 
+// `--profile N` logs into the Nth proxy's own browser profile, through that
+// proxy, so the cf_clearance cookie it earns is valid for that proxy's IP.
+// Without --profile we use the default single profile (./browser-state-context).
+const pi = process.argv.indexOf('--profile')
+const profile = pi !== -1 ? Number(process.argv[pi + 1]) : null
+let contextDir = BROWSER_CONTEXT_DIR
+let proxy
+if (profile != null) {
+  if (!PROXIES[profile]) {
+    console.error(`No proxy #${profile} in proxies.txt (found ${PROXIES.length}).`)
+    process.exit(1)
+  }
+  contextDir = `${BROWSER_CONTEXT_DIR}-${profile}`
+  proxy = PROXIES[profile]
+  console.log(`Logging in profile ${profile} via ${proxy.server} (dir: ${contextDir})`)
+} else {
+  proxy = PROXIES[0] // single-proxy mode (or undefined for direct)
+}
+
 let ctx
 try {
   // CARDLADDER-APP-2: real Chrome + anti-automation flags to clear Cloudflare.
-  ctx = await launchContext(BROWSER_CONTEXT_DIR, { headless: false })
+  ctx = await launchContext(contextDir, { headless: false, proxy })
 } catch (e) {
   // Most common cause: the worker is still running and holds the context lock.
   console.error(`CLW_LOGIN_ERROR ${e instanceof Error ? e.message : String(e)}`)

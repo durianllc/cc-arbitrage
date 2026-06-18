@@ -1,8 +1,10 @@
 node_modules/
 browser-state-context/
+browser-state-context-*/
 *-context/
 cache.json
 results.csv
 .env
 settings.txt
 proxy.txt
+proxies.txt

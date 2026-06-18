@@ -20,7 +20,7 @@
  *   node run.mjs --categories Pokemon    # override default category list
  */
 
-import './config.mjs'
+import { PROXIES } from './config.mjs'
 import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { launchContext } from './browser.mjs'
 import { lookupCardLadder, checkSession } from './cardladder.mjs'
@@ -91,35 +91,60 @@ async function main() {
   const targets = eligible.slice(0, args.limit)
   if (targets.length < eligible.length) console.log(`Limiting to first ${targets.length} (priciest).`)
 
-  // ── 3. Card Ladder lookups (browser tab pool, checkpointed) ──────────────
+  // ── 3. Card Ladder lookups (proxy fleet × tab pool, checkpointed) ────────
   const cache = loadCache()
-  const ctx = await launchContext(CONTEXT_DIR, { headless: !args.headed })
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-  // Validate the session once on the first tab before fanning out.
-  const probe = ctx.pages()[0] ?? await ctx.newPage()
-  if (!(await checkSession(probe))) {
-    await ctx.close().catch(() => {})
-    console.error('\nNot logged in to Card Ladder. Run `npm run login`, sign in, close the window, then re-run.')
+  // One "profile" = one logged-in browser. With ≥2 proxies we run a fleet, each
+  // proxy getting its own profile dir (browser-state-context-N) logged in via
+  // `node login.mjs --profile N`. With 0–1 proxies we use the single default
+  // profile (./browser-state-context) so existing logins keep working.
+  const multi = PROXIES.length >= 2
+  const profiles = multi
+    ? PROXIES.map((proxy, i) => ({ contextDir: `${CONTEXT_DIR}-${i}`, proxy, id: `p${i}` }))
+    : [{ contextDir: CONTEXT_DIR, proxy: PROXIES[0], id: 'p0' }]
+  console.log(multi
+    ? `Proxy fleet: ${profiles.length} profiles × ${args.concurrency} tabs = ${profiles.length * args.concurrency} workers.`
+    : `Single profile × ${args.concurrency} tabs.`)
+
+  // Launch each profile's browser and validate its session. A profile that
+  // isn't logged in is skipped (warned), not fatal — the others still run.
+  const live = []
+  for (const p of profiles) {
+    let ctx
+    try {
+      ctx = await launchContext(p.contextDir, { headless: !args.headed, proxy: p.proxy })
+    } catch (e) {
+      console.warn(`${p.id}: could not launch (${e.message.slice(0, 80)}) — skipping.`)
+      continue
+    }
+    const probe = ctx.pages()[0] ?? await ctx.newPage()
+    if (!(await checkSession(probe))) {
+      await ctx.close().catch(() => {})
+      console.warn(`${p.id}: not logged in — run \`node login.mjs${multi ? ` --profile ${p.id.slice(1)}` : ''}\` and re-run. Skipping.`)
+      continue
+    }
+    live.push({ ...p, ctx, probe })
+  }
+  if (!live.length) {
+    console.error('\nNo logged-in profiles available. Log in (see warnings above) and re-run.')
     process.exit(1)
   }
 
-  // Only look up cards we don't already have a value for (re-runs retry failures).
+  // Only look up cards without a value yet (re-runs retry failures).
   const todo = targets.filter((c) => cache[`${c.gradingID}|${c.grader}`]?.clValue == null)
-  console.log(`${targets.length - todo.length} already cached; looking up ${todo.length} with ${args.concurrency} tab(s).`)
+  console.log(`${targets.length - todo.length} already cached; looking up ${todo.length} across ${live.length} profile(s).`)
 
-  // Shared work queue: each worker owns one tab and pulls the next card until
-  // the queue drains. The event loop is single-threaded, so `next++` and the
-  // cache writes never truly race.
+  // One shared queue across the whole fleet. Single-threaded event loop means
+  // `next++` and cache writes never truly race.
   let next = 0
   let done = 0
   let aborted = false
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
-  async function worker(workerId) {
-    // Stagger tab startup so the tabs don't all hit Cloudflare in the same instant.
-    if (workerId > 0) await sleep(workerId * 1500)
-    const page = workerId === 0 ? probe : await ctx.newPage()
+  async function worker(profile, tabIdx) {
+    if (tabIdx > 0) await sleep(tabIdx * 1500) // stagger tabs within a profile
+    const page = tabIdx === 0 ? profile.probe : await profile.ctx.newPage()
+    const wid = `${profile.id}t${tabIdx}`
     while (!aborted) {
       const i = next++
       if (i >= todo.length) break
@@ -128,27 +153,31 @@ async function main() {
       try {
         const { value, cardName, url } = await lookupCardLadder(page, { certNumber: c.gradingID, grader: c.grader })
         cache[key] = { clValue: value, clName: cardName, clUrl: url }
-        console.log(`[${++done}/${todo.length}] w${workerId} ${c.grader} ${c.gradingID} — CL $${value} — ${c.itemName.slice(0, 50)}`)
+        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CL $${value} — ${c.itemName.slice(0, 45)}`)
       } catch (e) {
-        if (e.code === 'AUTH_REQUIRED') { aborted = true; break } // session died; stop all workers
+        if (e.code === 'AUTH_REQUIRED') {
+          // Only this profile's session died — stop its tabs, let others run on.
+          console.warn(`${wid}: session expired — stopping this profile.`)
+          profile.dead = true
+          break
+        }
         if (e.code === 'CLOUDFLARE_BLOCK') {
-          // Transient — DON'T cache as a failure (so a later re-run retries it),
-          // just back off to let Cloudflare cool down before the next lookup.
-          console.log(`[${done}/${todo.length}] w${workerId} ${c.grader} ${c.gradingID} — CLOUDFLARE BLOCK, backing off 30s`)
+          // Transient — don't cache as failure; back off so this IP cools down.
+          console.log(`[${done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CLOUDFLARE BLOCK, backing off 30s`)
           await sleep(30_000)
           continue
         }
         cache[key] = { clValue: null, error: e.message }
-        console.log(`[${++done}/${todo.length}] w${workerId} ${c.grader} ${c.gradingID} — no value (${e.message.slice(0, 40)})`)
+        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — no value (${e.message.slice(0, 40)})`)
       }
       saveCache(cache) // checkpoint after every lookup so a crash loses nothing
-      if (args.delay) await sleep(args.delay) // pace requests to stay under Cloudflare's radar
+      if (args.delay) await sleep(args.delay) // pace requests per tab
     }
   }
 
-  const n = Math.min(args.concurrency, Math.max(1, todo.length))
-  await Promise.all(Array.from({ length: n }, (_, w) => worker(w)))
-  await ctx.close().catch(() => {})
+  const tabs = Math.min(args.concurrency, Math.max(1, todo.length))
+  await Promise.all(live.flatMap((p) => Array.from({ length: tabs }, (_, t) => worker(p, t))))
+  await Promise.all(live.map((p) => p.ctx.close().catch(() => {})))
 
   // ── 4. Compute discrepancy + write CSV ───────────────────────────────────
   const rows = []

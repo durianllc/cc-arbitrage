@@ -30,28 +30,30 @@ import { chromium } from 'playwright'
 
 export const CARD_LADDER_BASE = process.env.CARD_LADDER_BASE ?? 'https://app.cardladder.com'
 
-// Optional residential proxy — set PROXY_SERVER (and optionally PROXY_USERNAME /
-// PROXY_PASSWORD) in .env to route all browser traffic through it.
+// Optional residential proxy. A per-launch `proxy` object ({server, username,
+// password}) takes priority; otherwise we fall back to PROXY_SERVER env vars.
 // Recommended when running on a server whose IP Cloudflare flags.
 // Format: http://host:port  or  socks5://host:port
-function proxyOpts() {
-  const server = process.env.PROXY_SERVER
+function proxyOptsFrom(proxy) {
+  const server = proxy?.server ?? process.env.PROXY_SERVER
   if (!server) return {}
-  const proxy = { server }
-  if (process.env.PROXY_USERNAME) proxy.username = process.env.PROXY_USERNAME
-  if (process.env.PROXY_PASSWORD) proxy.password = process.env.PROXY_PASSWORD
+  const p = { server }
+  const username = proxy?.username ?? process.env.PROXY_USERNAME
+  const password = proxy?.password ?? process.env.PROXY_PASSWORD
+  if (username) p.username = username
+  if (password) p.password = password
   console.log(`[browser] using proxy: ${server}`)
-  return { proxy }
+  return { proxy: p }
 }
 
-function baseOpts(headless, userAgent) {
+function baseOpts(headless, userAgent, proxy) {
   return {
     headless,
     viewport: { width: 1280, height: 900 },
     ignoreDefaultArgs: ['--enable-automation'],
     args: ['--disable-blink-features=AutomationControlled'],
     ...(userAgent ? { userAgent } : {}),
-    ...proxyOpts(),
+    ...proxyOptsFrom(proxy),
   }
 }
 
@@ -67,9 +69,9 @@ async function launch(contextDir, opts) {
   }
 }
 
-export async function launchContext(contextDir, { headless }) {
+export async function launchContext(contextDir, { headless, proxy } = {}) {
   const override = process.env.CARD_LADDER_UA || undefined
-  let ctx = await launch(contextDir, baseOpts(headless, override))
+  let ctx = await launch(contextDir, baseOpts(headless, override, proxy))
 
   // Headless reports "HeadlessChrome" in the UA → Cloudflare challenge. When no
   // explicit override is set, transparently relaunch with the SAME UA minus the
@@ -80,7 +82,7 @@ export async function launchContext(contextDir, { headless }) {
     const ua = await page.evaluate(() => navigator.userAgent).catch(() => '')
     if (/headless/i.test(ua)) {
       await ctx.close().catch(() => {})
-      ctx = await launch(contextDir, baseOpts(headless, ua.replace(/Headless/gi, '')))
+      ctx = await launch(contextDir, baseOpts(headless, ua.replace(/Headless/gi, ''), proxy))
     }
   }
   return ctx
