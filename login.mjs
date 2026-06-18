@@ -17,7 +17,7 @@
  * sentinels (and the process exit) to drive the UI.
  */
 
-import 'dotenv/config'
+import './config.mjs'
 import { launchContext, CARD_LADDER_BASE } from './browser.mjs'
 
 const BROWSER_CONTEXT_DIR = process.env.BROWSER_CONTEXT_DIR ?? './browser-state-context'

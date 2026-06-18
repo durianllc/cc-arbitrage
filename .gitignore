@@ -4,3 +4,5 @@ browser-state-context/
 cache.json
 results.csv
 .env
+settings.txt
+proxy.txt

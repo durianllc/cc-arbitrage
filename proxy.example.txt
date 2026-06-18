@@ -1,0 +1,14 @@
+# Rename this file to proxy.txt and put ONE proxy on a single line.
+# Use a residential proxy (datacenter IPs get flagged by Cloudflare).
+# Any of these formats works:
+#
+#   http://host:port
+#   socks5://host:port
+#   http://user:pass@host:port
+#   host:port
+#   host:port:user:pass
+#   user:pass@host:port
+#
+# Leave the file empty (or delete it) to connect directly with no proxy.
+
+host:port:user:pass

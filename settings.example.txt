@@ -1,0 +1,5 @@
+# Rename this file to settings.txt and fill in your values.
+# One KEY=VALUE per line. Lines starting with # are ignored.
+
+# Discord webhook — Server Settings → Integrations → Webhooks → New Webhook → Copy URL
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/XXXX/YYYY

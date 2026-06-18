@@ -20,7 +20,7 @@
  *   node run.mjs --categories Pokemon    # override default category list
  */
 
-import 'dotenv/config'
+import './config.mjs'
 import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { launchContext } from './browser.mjs'
 import { lookupCardLadder, checkSession } from './cardladder.mjs'
