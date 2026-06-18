@@ -107,18 +107,40 @@ export async function lookupCardLadder(page, args) {
   try {
     await valueLoc.waitFor({ state: 'visible', timeout: 30_000 })
   } catch {
-    // Distinguish a Cloudflare block (transient — should be retried/backed off)
-    // from a genuine no-result. A challenge replaces the SPA with its own page.
-    const blocked = await page.evaluate(() => {
-      const t = document.body?.innerText || ''
-      return /verify you are human|verifying you are human|needs to review the security|cf-challenge|just a moment/i.test(t)
-    }).catch(() => false)
-    if (blocked) {
+    // Figure out WHY the value didn't appear, so failures are actionable instead
+    // of a generic "no value". Inspect the live page state.
+    const diag = await page.evaluate(() => {
+      const t = (document.body?.innerText || '').replace(/\s+/g, ' ')
+      const cf = /verify you are human|verifying you are human|needs to review the security|cf-challenge|just a moment/i.test(t)
+      const m = t.match(/([\d,]+)\s+results?/i)
+      return {
+        cf,
+        url: location.href,
+        results: m ? m[1] : null,
+        snippet: t.slice(0, 160),
+      }
+    }).catch(() => ({}))
+
+    // Logged-out session that didn't bounce to /login until after submit.
+    if (/\/login(\?|$)/i.test(diag.url || '')) throw authRequiredError()
+
+    if (diag.cf) {
       const e = new Error('Cloudflare challenge — request was blocked (rate-limited / flagged IP).')
       e.code = 'CLOUDFLARE_BLOCK'
       throw e
     }
-    throw new Error('No Card Ladder value found — double-check the cert number and that the grader is correct.')
+    // Search returned an explicit "0 results" → the card genuinely isn't on CL.
+    if (diag.results === '0') {
+      throw new Error(`No Card Ladder match (0 results) for cert ${cert} / ${clGrader}.`)
+    }
+    // Results loaded but the value selector missed → likely UI drift.
+    if (diag.results && diag.results !== '0') {
+      const e = new Error(`Found ${diag.results} results but couldn't read the CL value — page layout may have changed.`)
+      e.code = 'SELECTOR_DRIFT'
+      throw e
+    }
+    // Nothing rendered at all → throttle / slow load / not really logged in.
+    throw new Error(`No results rendered (throttled or session invalid?). Page: "${(diag.snippet || '').slice(0, 80)}"`)
   }
   const raw = (await valueLoc.textContent()) ?? ''
   const value = parseMoney(raw)
