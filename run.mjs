@@ -43,13 +43,14 @@ const GRADER_MAP = {
 }
 
 function parseArgs(argv) {
-  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 4, categories: ['Pokemon', 'One Piece'] }
+  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 2, delay: 800, categories: ['Pokemon', 'One Piece'] }
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i]
     if (k === '--limit') a.limit = Number(argv[++i])
     else if (k === '--threshold') a.threshold = Number(argv[++i])
     else if (k === '--headed') a.headed = true
     else if (k === '--concurrency') a.concurrency = Math.max(1, Number(argv[++i]))
+    else if (k === '--delay') a.delay = Math.max(0, Number(argv[++i]))
     else if (k === '--categories') a.categories = argv[++i].split(',').map(s => s.trim())
   }
   return a
@@ -113,7 +114,11 @@ async function main() {
   let done = 0
   let aborted = false
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
   async function worker(workerId) {
+    // Stagger tab startup so the tabs don't all hit Cloudflare in the same instant.
+    if (workerId > 0) await sleep(workerId * 1500)
     const page = workerId === 0 ? probe : await ctx.newPage()
     while (!aborted) {
       const i = next++
@@ -130,6 +135,7 @@ async function main() {
         if (e.code === 'AUTH_REQUIRED') { aborted = true; break } // session died; stop all workers
       }
       saveCache(cache) // checkpoint after every lookup so a crash loses nothing
+      if (args.delay) await sleep(args.delay) // pace requests to stay under Cloudflare's radar
     }
   }
 
