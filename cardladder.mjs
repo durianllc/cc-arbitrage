@@ -132,20 +132,13 @@ async function searchByName(page, { itemName, gradeNum, grader, clGrader }) {
   await page.waitForTimeout(2500)
   if (/\/login(\?|$)/i.test(page.url())) throw authRequiredError()
 
-  // Type the card name into the main search box (several selector fallbacks).
-  const search = page.locator(
-    'input[placeholder*="Search listing" i]:visible, input[placeholder*="Search" i]:visible'
-  ).first()
+  // Type the card name into the "Search listing titles" box. NOTE: it's a
+  // <textarea>, not an <input> — that was the bug. Submit with Enter.
+  const search = page.locator('textarea[placeholder*="Search listing" i]').first()
   await search.waitFor({ state: 'visible', timeout: 15_000 })
   await search.fill(query)
   await search.press('Enter')
-  await page.waitForTimeout(2500)
-
-  // Set the Grader filter.
-  await setFilter(page, 'Grader', clGrader)
-  // Set the Grade filter to the slab's numeric grade (e.g. "10", "9.5").
-  if (gradeNum != null) await setFilter(page, 'Grade', String(gradeNum))
-  await page.waitForTimeout(1500)
+  await page.waitForTimeout(3000)
 
   const res = await readClValue(page, `name "${query.slice(0, 40)}" / ${clGrader} ${gradeNum ?? ''}`)
   return { ...res, matchedBy: 'name' }
