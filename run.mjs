@@ -43,7 +43,7 @@ const GRADER_MAP = {
 }
 
 function parseArgs(argv) {
-  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 2, delay: 800, categories: ['Pokemon', 'One Piece'] }
+  const a = { limit: Infinity, threshold: 0.8, headed: false, concurrency: 2, delay: 800, profiles: 5, categories: ['Pokemon', 'One Piece'] }
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i]
     if (k === '--limit') a.limit = Number(argv[++i])
@@ -51,6 +51,7 @@ function parseArgs(argv) {
     else if (k === '--headed') a.headed = true
     else if (k === '--concurrency') a.concurrency = Math.max(1, Number(argv[++i]))
     else if (k === '--delay') a.delay = Math.max(0, Number(argv[++i]))
+    else if (k === '--profiles') a.profiles = Math.max(1, Number(argv[++i]))
     else if (k === '--categories') a.categories = argv[++i].split(',').map(s => s.trim())
   }
   return a
@@ -100,8 +101,9 @@ async function main() {
   // `node login.mjs --profile N`. With 0–1 proxies we use the single default
   // profile (./browser-state-context) so existing logins keep working.
   const multi = PROXIES.length >= 2
+  const proxiesSlice = PROXIES.slice(0, args.profiles)
   const profiles = multi
-    ? PROXIES.map((proxy, i) => ({ contextDir: `${CONTEXT_DIR}-${i}`, proxy, id: `p${i}` }))
+    ? proxiesSlice.map((proxy, i) => ({ contextDir: `${CONTEXT_DIR}-${i}`, proxy, id: `p${i}` }))
     : [{ contextDir: CONTEXT_DIR, proxy: PROXIES[0], id: 'p0' }]
   console.log(multi
     ? `Proxy fleet: ${profiles.length} profiles × ${args.concurrency} tabs = ${profiles.length * args.concurrency} workers.`
