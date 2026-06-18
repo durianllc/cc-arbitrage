@@ -164,7 +164,9 @@ async function main() {
           const { value, cardName, url } = await lookupCardLadder(page, { certNumber: c.gradingID, grader: c.grader })
           cache[key] = { clValue: value, clName: cardName, clUrl: url }
           const tag = attempt > 0 ? ` (retry ${attempt})` : ''
-          console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CL $${value}${tag} — ${c.itemName.slice(0, 45)}`)
+          const disc = ((1 - c.price / value) * 100).toFixed(0)
+          const deal = c.price <= args.threshold * value ? ' 🔥BUY' : ''
+          console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CC $${c.price} vs CL $${value} (${disc}% off)${deal}${tag} — ${c.itemName.slice(0, 40)}`)
           resolved = true
           break
         } catch (e) {
