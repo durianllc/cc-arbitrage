@@ -8,7 +8,10 @@
  * page, with grader/grade/prices as fields and a Card Ladder link in the body.
  */
 
-const WEBHOOK = process.env.DISCORD_WEBHOOK_URL
+// Read at CALL time, not module-load time: config.mjs uses top-level await, so
+// reading process.env when this module first evaluates can race ahead of the
+// env var being set. A getter sidesteps the import-ordering hazard entirely.
+const webhook = () => process.env.DISCORD_WEBHOOK_URL
 
 // Discord allows up to 10 embeds per message.
 const PER_MSG = 10
@@ -32,7 +35,7 @@ function embedFor(r) {
 }
 
 async function postBatch(embeds) {
-  const res = await fetch(WEBHOOK, {
+  const res = await fetch(webhook(), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ embeds }),
@@ -53,7 +56,7 @@ async function postBatch(embeds) {
  * @param {(msg: string) => void} [log]
  */
 export async function postBuysToDiscord(buys, log = () => {}) {
-  if (!WEBHOOK) {
+  if (!webhook()) {
     log('DISCORD_WEBHOOK_URL not set — skipping Discord post.')
     return
   }
