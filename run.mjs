@@ -30,6 +30,18 @@ import { postBuysToDiscord } from './discord.mjs'
 // Public Collector Crypt buy page for a listing (verified pattern, 2026-06).
 const ccUrl = (nftAddress) => `https://collectorcrypt.com/assets/solana/${nftAddress}`
 
+// Live SOL/USD price for converting SOL-denominated listings. Returns null on
+// failure (callers then skip SOL cards rather than post wrong numbers).
+async function getSolUsd() {
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd')
+    if (!r.ok) return null
+    const j = await r.json()
+    const v = j?.solana?.usd
+    return Number.isFinite(v) && v > 0 ? v : null
+  } catch { return null }
+}
+
 const CONTEXT_DIR = process.env.BROWSER_CONTEXT_DIR ?? './browser-state-context'
 const CACHE_FILE = './cache.json'
 const CSV_FILE = './results.csv'
@@ -79,15 +91,37 @@ async function main() {
   const all = await scrapeCards(args.categories, (m) => console.log(m))
   console.log(`Found ${all.length} listed cards.`)
 
+  // Some listings (mostly Magic Eden / "ME") are priced in SOL, not USDC.
+  // Convert those to USD at the live rate so comparisons aren't off by ~150x.
+  const needsSol = all.some((c) => (c.currency ?? '').toUpperCase() === 'SOL')
+  let solUsd = null
+  if (needsSol) {
+    solUsd = await getSolUsd()
+    if (solUsd) console.log(`SOL/USD rate: $${solUsd} (converting SOL-priced listings).`)
+    else console.warn('Could not fetch SOL/USD rate — SOL-priced listings will be SKIPPED to avoid bad data.')
+  }
+  for (const c of all) {
+    if ((c.currency ?? '').toUpperCase() === 'SOL') {
+      c.priceUsd = solUsd ? Math.round(c.price * solUsd * 100) / 100 : null // null → dropped below
+      c.priceNative = `${c.price} SOL`
+    } else {
+      c.priceUsd = c.price // USDC ≈ USD
+      c.priceNative = `$${c.price}`
+    }
+  }
+
   // ── 2. Filter to Card-Ladder-gradeable cards ─────────────────────────────
   const eligible = []
   let skipped = 0
   for (const c of all) {
     const grader = GRADER_MAP[(c.gradingCompany ?? '').toUpperCase()]
-    if (!grader || !c.gradingID) { skipped++; continue }
-    eligible.push({ ...c, grader })
+    if (!grader || !c.gradingID || c.priceUsd == null) { skipped++; continue }
+    eligible.push({ ...c, grader, price: c.priceUsd }) // price is now always USD
   }
-  console.log(`${eligible.length} cards are PSA/BGS/CGC/SGC with a cert; skipped ${skipped} (ungradeable on Card Ladder or no cert).`)
+  console.log(`${eligible.length} cards are PSA/BGS/CGC/SGC with a cert + USD price; skipped ${skipped} (ungradeable, no cert, or unconvertible SOL price).`)
+
+  // Re-sort by true USD price desc (API's price sort mixes SOL + USDC).
+  eligible.sort((a, b) => b.price - a.price)
 
   const targets = eligible.slice(0, args.limit)
   if (targets.length < eligible.length) console.log(`Limiting to first ${targets.length} (priciest).`)
