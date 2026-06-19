@@ -155,7 +155,9 @@ async function main() {
       try {
         const { value, cardName, url } = await lookupCardLadder(page, { certNumber: c.gradingID, grader: c.grader })
         cache[key] = { clValue: value, clName: cardName, clUrl: url }
-        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CL $${value} — ${c.itemName.slice(0, 45)}`)
+        const disc = ((1 - c.price / value) * 100).toFixed(0)
+        const deal = c.price <= args.threshold * value ? ' 🔥BUY' : ''
+        console.log(`[${++done}/${todo.length}] ${wid} ${c.grader} ${c.gradingID} — CC $${c.price} vs CL $${value} (${disc}% off)${deal} — ${c.itemName.slice(0, 40)}`)
       } catch (e) {
         if (e.code === 'AUTH_REQUIRED') {
           // Only this profile's session died — stop its tabs, let others run on.
