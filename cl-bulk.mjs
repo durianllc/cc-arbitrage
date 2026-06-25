@@ -154,8 +154,12 @@ try {
   // contains the "Export CSV" button.
   console.log('Opening Settings (gear)…')
   const exportBtn = page.locator('button:has-text("Export CSV")').first()
-  for (let attempt = 0; attempt < 3 && !(await exportBtn.count().catch(() => 0)); attempt++) {
-    await page.locator('i.material-icons:has-text("settings")').first().click({ timeout: 8000 }).catch(() => {})
+  const gearBtn = page.locator('button:has(i.material-icons:has-text("settings"))').first()
+  // Click the gear until the Export CSV button is actually VISIBLE (it's present
+  // in the DOM even when the Settings modal is closed, so check visibility).
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (await exportBtn.isVisible().catch(() => false)) break
+    await gearBtn.click({ timeout: 8000 }).catch(() => {})
     await sleep(1500)
   }
   await shot(page, 'settings-open')
