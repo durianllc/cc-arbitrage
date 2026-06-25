@@ -121,14 +121,38 @@ try {
   // Click the "Upload" button (appears after "successfully read N cards").
   console.log('Clicking Upload…')
   await page.locator('button:has-text("Upload"):visible').first().click({ timeout: 8000 })
-  console.log('Uploading — waiting for Card Ladder to fetch values (this can take a minute)…')
-  await sleep(20000)
+
+  // Card Ladder fetches every cert from the grading company — this takes
+  // ~5-10 min for 500 cards. POLL until it finishes instead of a fixed wait.
+  // The modal shows "Finished uploading N of M cards" then "Saving"; we're done
+  // when the count reaches M and "Saving" is gone (or the modal closes).
+  console.log('Uploading — polling until Card Ladder finishes (up to ~15 min)…')
+  const MAX_MS = 15 * 60 * 1000
+  const t0 = Date.now()
+  let lastLog = ''
+  while (Date.now() - t0 < MAX_MS) {
+    await sleep(8000)
+    const txt = await page.evaluate(() => document.body?.innerText || '').catch(() => '')
+    const modalOpen = /UPLOAD CERTS/i.test(txt)
+    const m = txt.match(/Finished uploading\s+(\d+)\s+of\s+(\d+)\s+cards/i)
+    const saving = /\bSaving\b/i.test(txt)
+    if (m && `${m[1]}/${m[2]}` !== lastLog) { lastLog = `${m[1]}/${m[2]}`; console.log(`  progress: ${lastLog} cards${saving ? ' (saving…)' : ''}`) }
+    // Done: modal gone, or all cards uploaded and no longer "saving".
+    if (!modalOpen) { console.log('  upload modal closed — done.'); break }
+    if (m && m[1] === m[2] && !saving) { console.log('  all cards uploaded.'); break }
+  }
   await shot(page, 'after-upload')
+
+  // Close the upload modal if it's still open, so the collection view (with the
+  // gear/Export) is interactable.
+  await page.locator('button.modal-close, button:has(i.material-icons:text-is("close"))').first()
+    .click({ timeout: 3000 }).catch(() => {})
+  await sleep(1500)
 
   // ── Export the collection (capture the download) ────────────────────────
   console.log('Exporting collection CSV…')
   await page.locator('i.material-icons:has-text("settings")').first().click({ timeout: 8000 }).catch(() => {})
-  await sleep(1000)
+  await sleep(1500)
   await shot(page, 'settings-open')
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 20000 }),
