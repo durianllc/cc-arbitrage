@@ -30,6 +30,13 @@ const COLLECTION = ci !== -1 ? args[ci + 1] : basename(file, '.csv')
 // --export-only: skip create+upload; just select the existing collection by
 // name and export it (use when the upload already happened).
 const exportOnly = args.includes('--export-only')
+// --into: upload into an EXISTING (pre-created) collection instead of creating
+// one. Sidesteps the flaky create-collection UI. --no-export skips exporting.
+const intoIdx = args.indexOf('--into')
+const into = intoIdx !== -1 ? args[intoIdx + 1] : null
+const noExport = args.includes('--no-export')
+// Robust selector for a collection row in the switcher dropdown.
+const collRow = (page, name) => page.locator(`li:has(span:text-is("${name}")):visible, li:has-text("${name}"):visible`).first()
 
 mkdirSync('./debug', { recursive: true })
 mkdirSync('./cert-upload/exports', { recursive: true })
@@ -69,35 +76,40 @@ try {
     await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
     await sleep(1200)
     await shot(page, 'switcher-open')
-    // Click a VISIBLE switcher entry (hidden recent-search spans also match the text).
-    await page.locator(`:text-is("${COLLECTION}"):visible`).first().click({ timeout: 6000 })
+    // Click the collection's switcher row (robust: a dropdown <li> with the name).
+    await collRow(page, COLLECTION).click({ timeout: 6000 })
     await sleep(3000)
     await shot(page, 'collection-selected')
   } else {
-  // ── Create a new collection named COLLECTION ────────────────────────────
-  console.log(`Creating new collection "${COLLECTION}"…`)
-  // 1. Open the collection switcher (chevron next to the collection title).
-  await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
-  await sleep(1200)
-  await shot(page, 'switcher-open')
-  // 2. Click "Create New Collection".
-  await page.locator(':text("Create New Collection"):visible').first().click({ timeout: 6000 })
-  await sleep(1000)
-  await shot(page, 'create-dialog')
-  // 3. Name it + Create — SCOPED TO THE DIALOG so we don't type into the global
-  //    search bar (which would navigate to Sales). The dialog has the heading
-  //    "Create New Collection", a "Collection Name" input, and a Create button.
-  const dialog = page.locator('[role="dialog"]:visible, .modal:visible').filter({ hasText: 'Create New Collection' }).first()
-  const nameInput = dialog.locator('input:visible').first()
-  await nameInput.fill(COLLECTION)
-  await shot(page, 'name-filled')
-  await dialog.locator('button:has-text("Create")').first().click({ timeout: 5000 })
-  await sleep(2500)
-  await shot(page, 'collection-created')
-  // Safety: make sure we didn't get bounced to Sales.
-  if (!/\/collection/i.test(page.url())) {
-    await page.goto(`${CARD_LADDER_BASE}/collection`, { waitUntil: 'domcontentloaded' })
+  // Prepare the target collection: select an existing one (--into) or create new.
+  if (into) {
+    console.log(`Selecting existing collection "${into}" to upload into…`)
+    await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
+    await sleep(1200)
+    await shot(page, 'switcher-open')
+    await collRow(page, into).click({ timeout: 6000 })
     await sleep(3000)
+    await shot(page, 'collection-selected')
+  } else {
+    console.log(`Creating new collection "${COLLECTION}"…`)
+    await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
+    await sleep(1200)
+    await shot(page, 'switcher-open')
+    await page.locator(':text("Create New Collection"):visible').first().click({ timeout: 6000 })
+    await sleep(1000)
+    await shot(page, 'create-dialog')
+    // Name it + Create — SCOPED TO THE DIALOG so we don't type into the global
+    // search bar (which would navigate to Sales).
+    const dialog = page.locator('[role="dialog"]:visible, .modal:visible').filter({ hasText: 'Create New Collection' }).first()
+    await dialog.locator('input:visible').first().fill(COLLECTION)
+    await shot(page, 'name-filled')
+    await dialog.locator('button:has-text("Create")').first().click({ timeout: 5000 })
+    await sleep(2500)
+    await shot(page, 'collection-created')
+    if (!/\/collection/i.test(page.url())) {
+      await page.goto(`${CARD_LADDER_BASE}/collection`, { waitUntil: 'domcontentloaded' })
+      await sleep(3000)
+    }
   }
 
   // ── Open the collection's "+" → Cert CSV ────────────────────────────────
@@ -173,8 +185,11 @@ try {
   await page.locator('button.modal-close, button:has(i.material-icons:text-is("close"))').first()
     .click({ timeout: 3000 }).catch(() => {})
   await sleep(1500)
-  } // end of !exportOnly (create + upload)
+  } // end of !exportOnly (create/select + upload)
 
+  if (noExport) {
+    console.log('\n✅ Upload done (--no-export). Export later with --export-only.')
+  } else {
   // ── Export the collection (capture the download) ────────────────────────
   // Must press the gear (settings) first to reveal the Settings modal, which
   // contains the "Export CSV" button.
@@ -224,6 +239,7 @@ try {
     console.log(`\n✅ Saved export (response) → ${out}`)
   }
   console.log('Now run:  node analyze-exports.mjs')
+  } // end of export (!noExport)
 } catch (e) {
   console.error(`\n❌ Failed at step ${shotN}: ${e.message}`)
   await shot(page, 'error')
