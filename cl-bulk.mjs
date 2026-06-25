@@ -230,7 +230,12 @@ try {
   console.error('Share the ./debug/*.png screenshots and I\'ll fix the selector.')
 }
 
-console.log('\nLeaving the window open 30s so you can inspect…')
-await sleep(30000)
+// When looping many files (NO_WAIT=1) skip the inspect pause and close fast.
+if (!process.env.NO_WAIT) {
+  console.log('\nLeaving the window open 30s so you can inspect…')
+  await sleep(30000)
+} else {
+  await sleep(2000)
+}
 await ctx.close().catch(() => {})
 process.exit(0)
