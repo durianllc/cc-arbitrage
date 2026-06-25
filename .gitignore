@@ -8,3 +8,6 @@ results.csv
 settings.txt
 proxy.txt
 proxies.txt
+cert-upload/
+debug/
+.DS_Store
