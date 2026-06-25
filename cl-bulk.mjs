@@ -69,7 +69,8 @@ try {
     await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
     await sleep(1200)
     await shot(page, 'switcher-open')
-    await page.locator(`:text-is("${COLLECTION}")`).first().click({ timeout: 6000 })
+    // Click a VISIBLE switcher entry (hidden recent-search spans also match the text).
+    await page.locator(`:text-is("${COLLECTION}"):visible`).first().click({ timeout: 6000 })
     await sleep(3000)
     await shot(page, 'collection-selected')
   } else {
