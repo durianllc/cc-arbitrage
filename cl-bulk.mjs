@@ -81,7 +81,7 @@ try {
   await sleep(1200)
   await shot(page, 'switcher-open')
   // 2. Click "Create New Collection".
-  await page.locator(':text("Create New Collection")').first().click({ timeout: 6000 })
+  await page.locator(':text("Create New Collection"):visible').first().click({ timeout: 6000 })
   await sleep(1000)
   await shot(page, 'create-dialog')
   // 3. Name it + Create — SCOPED TO THE DIALOG so we don't type into the global

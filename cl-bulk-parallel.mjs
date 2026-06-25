@@ -66,7 +66,7 @@ async function processFile(page, tag, file) {
     log('creating collection…')
     await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
     await sleep(1200)
-    await page.locator(':text("Create New Collection")').first().click({ timeout: 6000 })
+    await page.locator(':text("Create New Collection"):visible').first().click({ timeout: 6000 })
     await sleep(1000)
     const dialog = page.locator('[role="dialog"]:visible, .modal:visible').filter({ hasText: 'Create New Collection' }).first()
     await dialog.locator('input:visible').first().fill(COLLECTION)
