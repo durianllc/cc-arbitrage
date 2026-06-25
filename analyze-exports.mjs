@@ -65,6 +65,9 @@ const num = (s) => { const n = parseFloat(String(s ?? '').replace(/[^0-9.]/g, ''
 
 if (!existsSync('./cert-upload/mapping.json')) { console.error('No cert-upload/mapping.json — run gen-cert-csvs.mjs first.'); process.exit(1) }
 const mapping = JSON.parse(readFileSync('./cert-upload/mapping.json', 'utf8'))
+// Optional: reuse Card Ladder deep-links cached from prior live lookups so the
+// Discord embed can show a "Card Ladder" link (the export has no CL URL).
+const cache = existsSync('./cache.json') ? JSON.parse(readFileSync('./cache.json', 'utf8')) : {}
 // cert-only index as a fallback when the export lacks a grader column.
 const byCert = {}
 for (const [k, v] of Object.entries(mapping)) byCert[k.split('|')[0]] = { ...v, grader: k.split('|')[1] }
@@ -99,7 +102,7 @@ for (const f of files) {
     buys.push({
       name: m.name, category: m.category, grader: m.grader, grade: m.grade,
       cc_price: m.cc_price, card_ladder_value: clValue, discount_pct: 1 - ratio,
-      cc_url: ccUrl(m.nft), cl_url: '',
+      cc_url: ccUrl(m.nft), cl_url: cache[`${cert}|${m.grader}`]?.clUrl ?? '',
     })
   }
 }
