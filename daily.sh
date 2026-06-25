@@ -13,6 +13,8 @@
 # Schedule it (see README) to run every morning.
 
 cd "$(dirname "$0")" || exit 1
+# Scheduled runs (cron/launchd) start with a bare PATH — make sure node is found.
+export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 COLL=${1:-ARBALL}
 
 echo "=== $(date) — daily arbitrage re-check ==="
