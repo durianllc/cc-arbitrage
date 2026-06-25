@@ -73,22 +73,29 @@ try {
   await shot(page, 'collection-selected')
 
   // ── Open Add Card → Cert CSV ────────────────────────────────────────────
-  // There are several add_circle icons; click each until the Add-Card modal
-  // (which contains the "Cert CSV" card) actually appears.
-  console.log('Opening Add Card modal…')
-  const certCard = page.locator('.cta-card:has-text("Cert CSV"), h5:has-text("Cert CSV")').first()
-  const adds = page.locator('i.material-icons:has-text("add_circle")')
-  const n = await adds.count()
+  // Two "+" buttons exist: the global header one opens "ADD SALE" (wrong); the
+  // collection's own "+" (by the gear) opens "Add Card to Collection" (right).
+  // Click each add_circle BUTTON until the "Cert CSV" card appears, closing any
+  // wrong modal (via its X) in between.
+  console.log('Opening Add Card → Collection modal…')
+  const certCard = page.locator('h5:has-text("Cert CSV"), .cta-card:has-text("Cert CSV")').first()
+  const closeModal = async () => {
+    await page.locator('button.modal-close, button:has(i.material-icons:text-is("close"))').first()
+      .click({ timeout: 2500 }).catch(() => {})
+    await sleep(500)
+  }
+  const addBtns = page.locator('button:has(i.material-icons:has-text("add_circle"))')
+  const n = await addBtns.count()
+  console.log(`  found ${n} add (+) button(s)`)
   let opened = false
   for (let i = 0; i < n; i++) {
-    await adds.nth(i).click({ timeout: 5000 }).catch(() => {})
-    await sleep(1200)
-    if (await certCard.count()) { opened = true; break }
-    await page.keyboard.press('Escape').catch(() => {}) // close wrong modal, try next
-    await sleep(400)
+    await addBtns.nth(i).click({ timeout: 5000 }).catch(() => {})
+    await sleep(1500)
+    if (await certCard.count().catch(() => 0)) { opened = true; break }
+    await closeModal() // wrong modal (e.g. ADD SALE) — close and try the next +
   }
   await shot(page, 'add-modal')
-  if (!opened) throw new Error('Could not find the "Cert CSV" card after opening Add Card.')
+  if (!opened) throw new Error('Could not find the "Cert CSV" card after trying all + buttons.')
 
   console.log('Clicking Cert CSV…')
   await certCard.click({ timeout: 6000 })
