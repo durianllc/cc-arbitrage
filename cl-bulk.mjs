@@ -51,6 +51,11 @@ const proxy = pIdx !== -1 ? PROXIES[Number(args[pIdx + 1])] : undefined
 const ctx = await launchContext('./browser-state-context', { headless: false, proxy })
 const page = ctx.pages()[0] ?? await ctx.newPage()
 
+// Card Ladder's "Export CSV" pops a native confirm() ("Are you sure…"). Playwright
+// auto-DISMISSES JS dialogs by default (= clicks Cancel), which silently aborts
+// the export. Accept them so the export actually runs.
+page.on('dialog', (d) => d.accept().catch(() => {}))
+
 console.log(`Target collection: "${COLLECTION}" | file: ${filePath}`)
 await page.goto(`${CARD_LADDER_BASE}/collection`, { waitUntil: 'domcontentloaded' })
 await sleep(4000)
