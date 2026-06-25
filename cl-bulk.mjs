@@ -16,16 +16,17 @@
  * land in ./debug/NN-step.png — share them if a step misbehaves.
  */
 import { mkdirSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, basename } from 'node:path'
 import './config.mjs'
 import { launchContext, CARD_LADDER_BASE } from './browser.mjs'
 import { PROXIES } from './config.mjs'
 
 const args = process.argv.slice(2)
 const ci = args.indexOf('--collection')
-const COLLECTION = ci !== -1 ? args[ci + 1] : 'ARB'
 const file = args.find((a) => a.endsWith('.csv')) ?? 'cert-upload/arb2.csv'
 const filePath = resolve(file)
+// Default the collection name to the file's base (arb2.csv → "arb2").
+const COLLECTION = ci !== -1 ? args[ci + 1] : basename(file, '.csv')
 
 mkdirSync('./debug', { recursive: true })
 mkdirSync('./cert-upload/exports', { recursive: true })
@@ -48,36 +49,29 @@ if (/\/login(\?|$)/i.test(page.url())) { console.error('Not logged in — run `n
 await shot(page, 'collection-loaded')
 
 try {
-  // ── Select or create the target collection ──────────────────────────────
-  // Open the collection switcher (the chevron next to the collection title).
-  console.log('Opening collection switcher…')
-  await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 }).catch(() => {})
+  // ── Create a new collection named COLLECTION ────────────────────────────
+  console.log(`Creating new collection "${COLLECTION}"…`)
+  // 1. Open the collection switcher (chevron next to the collection title).
+  await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
   await sleep(1200)
   await shot(page, 'switcher-open')
+  // 2. Click "Create New Collection".
+  await page.locator(':text("Create New Collection")').first().click({ timeout: 6000 })
+  await sleep(1000)
+  await shot(page, 'create-dialog')
+  // 3. Name it and confirm (Enter, plus a Save/Create button if present).
+  const nameInput = page.locator('input[type="text"]:visible, input:visible').first()
+  await nameInput.fill(COLLECTION)
+  await page.locator('button:has-text("Create"), button:has-text("Save"), button[type="submit"]:visible').first()
+    .click({ timeout: 4000 }).catch(() => nameInput.press('Enter'))
+  await sleep(2500)
+  await shot(page, 'collection-created')
 
-  const existing = page.locator(`:visible:text-is("${COLLECTION}")`).first()
-  if (await existing.count()) {
-    console.log(`Selecting existing collection "${COLLECTION}".`)
-    await existing.click({ timeout: 5000 }).catch(() => {})
-  } else {
-    console.log(`Creating collection "${COLLECTION}"…`)
-    // Look for a create/new control in the switcher dropdown.
-    await page.locator('button:has-text("Create"), button:has-text("New"), :text("Create Collection"), :text("Add Collection")').first().click({ timeout: 5000 }).catch(() => {})
-    await sleep(800)
-    await shot(page, 'create-dialog')
-    const nameInput = page.locator('input[type="text"]:visible').first()
-    await nameInput.fill(COLLECTION).catch(() => {})
-    await page.locator('button:has-text("Save"), button:has-text("Create")').first().click({ timeout: 5000 }).catch(() => {})
-    await sleep(1500)
-  }
-  await shot(page, 'collection-selected')
-
-  // ── Open Add Card → Cert CSV ────────────────────────────────────────────
-  // Two "+" buttons exist: the global header one opens "ADD SALE" (wrong); the
-  // collection's own "+" (by the gear) opens "Add Card to Collection" (right).
-  // Click each add_circle BUTTON until the "Cert CSV" card appears, closing any
-  // wrong modal (via its X) in between.
-  console.log('Opening Add Card → Collection modal…')
+  // ── Open the collection's "+" → Cert CSV ────────────────────────────────
+  // Two "+" exist: the GLOBAL one in the very top bar opens "ADD SALE" (wrong).
+  // The COLLECTION one sits lower (in the collection header). Pick by Y position
+  // (>90px from top) so we never hit Add Sale, then fall back to scanning all.
+  console.log('Opening the collection + → Cert CSV…')
   const certCard = page.locator('h5:has-text("Cert CSV"), .cta-card:has-text("Cert CSV")').first()
   const closeModal = async () => {
     await page.locator('button.modal-close, button:has(i.material-icons:text-is("close"))').first()
@@ -86,16 +80,23 @@ try {
   }
   const addBtns = page.locator('button:has(i.material-icons:has-text("add_circle"))')
   const n = await addBtns.count()
-  console.log(`  found ${n} add (+) button(s)`)
-  let opened = false
+  // Order candidates: collection-header buttons (y>90) first, then the rest.
+  const order = []
   for (let i = 0; i < n; i++) {
+    const box = await addBtns.nth(i).boundingBox().catch(() => null)
+    order.push({ i, y: box?.y ?? 0 })
+  }
+  order.sort((a, b) => (a.y > 90 ? 0 : 1) - (b.y > 90 ? 0 : 1))
+  console.log(`  found ${n} + button(s)`)
+  let opened = false
+  for (const { i } of order) {
     await addBtns.nth(i).click({ timeout: 5000 }).catch(() => {})
     await sleep(1500)
     if (await certCard.count().catch(() => 0)) { opened = true; break }
-    await closeModal() // wrong modal (e.g. ADD SALE) — close and try the next +
+    await closeModal()
   }
   await shot(page, 'add-modal')
-  if (!opened) throw new Error('Could not find the "Cert CSV" card after trying all + buttons.')
+  if (!opened) throw new Error('Could not find the "Cert CSV" card after trying the + buttons.')
 
   console.log('Clicking Cert CSV…')
   await certCard.click({ timeout: 6000 })
