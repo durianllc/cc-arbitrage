@@ -27,6 +27,9 @@ const file = args.find((a) => a.endsWith('.csv')) ?? 'cert-upload/arb2.csv'
 const filePath = resolve(file)
 // Default the collection name to the file's base (arb2.csv → "arb2").
 const COLLECTION = ci !== -1 ? args[ci + 1] : basename(file, '.csv')
+// --export-only: skip create+upload; just select the existing collection by
+// name and export it (use when the upload already happened).
+const exportOnly = args.includes('--export-only')
 
 mkdirSync('./debug', { recursive: true })
 mkdirSync('./cert-upload/exports', { recursive: true })
@@ -55,6 +58,16 @@ if (/\/login(\?|$)/i.test(page.url())) { console.error('Not logged in — run `n
 await shot(page, 'collection-loaded')
 
 try {
+  if (exportOnly) {
+    // Select the existing collection by name, then jump straight to export.
+    console.log(`Selecting existing collection "${COLLECTION}" (export-only)…`)
+    await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
+    await sleep(1200)
+    await shot(page, 'switcher-open')
+    await page.locator(`:text-is("${COLLECTION}")`).first().click({ timeout: 6000 })
+    await sleep(3000)
+    await shot(page, 'collection-selected')
+  } else {
   // ── Create a new collection named COLLECTION ────────────────────────────
   console.log(`Creating new collection "${COLLECTION}"…`)
   // 1. Open the collection switcher (chevron next to the collection title).
@@ -154,6 +167,7 @@ try {
   await page.locator('button.modal-close, button:has(i.material-icons:text-is("close"))').first()
     .click({ timeout: 3000 }).catch(() => {})
   await sleep(1500)
+  } // end of !exportOnly (create + upload)
 
   // ── Export the collection (capture the download) ────────────────────────
   // Must press the gear (settings) first to reveal the Settings modal, which
