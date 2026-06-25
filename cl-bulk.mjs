@@ -73,17 +73,31 @@ try {
   await shot(page, 'collection-selected')
 
   // ── Open Add Card → Cert CSV ────────────────────────────────────────────
-  console.log('Opening Add Card → Cert CSV…')
-  await page.locator('i.material-icons:has-text("add_circle")').first().click({ timeout: 8000 }).catch(() => {})
-  await sleep(1200)
+  // There are several add_circle icons; click each until the Add-Card modal
+  // (which contains the "Cert CSV" card) actually appears.
+  console.log('Opening Add Card modal…')
+  const certCard = page.locator('.cta-card:has-text("Cert CSV"), h5:has-text("Cert CSV")').first()
+  const adds = page.locator('i.material-icons:has-text("add_circle")')
+  const n = await adds.count()
+  let opened = false
+  for (let i = 0; i < n; i++) {
+    await adds.nth(i).click({ timeout: 5000 }).catch(() => {})
+    await sleep(1200)
+    if (await certCard.count()) { opened = true; break }
+    await page.keyboard.press('Escape').catch(() => {}) // close wrong modal, try next
+    await sleep(400)
+  }
   await shot(page, 'add-modal')
-  await page.locator(':text("Cert CSV")').first().click({ timeout: 6000 }).catch(() => {})
+  if (!opened) throw new Error('Could not find the "Cert CSV" card after opening Add Card.')
+
+  console.log('Clicking Cert CSV…')
+  await certCard.click({ timeout: 6000 })
   await sleep(1000)
   await shot(page, 'cert-csv-modal')
 
   // ── Set the file input directly (no native picker) ──────────────────────
   console.log('Setting file input…')
-  const fileInput = page.locator('input[type="file"]').first()
+  const fileInput = page.locator('input[type="file"][accept=".csv"], input[type="file"]').first()
   await fileInput.setInputFiles(filePath, { timeout: 8000 })
   await sleep(2500)
   await shot(page, 'file-read')
