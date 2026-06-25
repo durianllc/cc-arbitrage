@@ -15,7 +15,7 @@
  *
  * Each tab logs with a [tN] prefix and screenshots to ./debug/tN-step.png.
  */
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { resolve, basename } from 'node:path'
 import './config.mjs'
 import { launchContext, CARD_LADDER_BASE } from './browser.mjs'
@@ -101,20 +101,35 @@ async function processFile(page, tag, file) {
     await sleep(2500)
     await page.locator('button:has-text("Upload"):visible').first().click({ timeout: 8000 })
 
-    // Poll until Card Ladder finishes fetching (up to 20 min — parallel may slow each).
-    log('waiting for Card Ladder to fetch values…')
+    // Wait for the import to TRULY complete. Don't trust the modal closing —
+    // poll the modal's "N of M" counter AND the collection's "N results" count,
+    // and only finish when it actually reaches the expected number of cards.
+    const expected = readFileSync(filePath, 'utf8').split(/\r?\n/).filter((l) => l.trim()).length - 1
+    log(`waiting for import to complete (target ${expected} cards)…`)
     const t0 = Date.now()
     let lastLog = ''
-    while (Date.now() - t0 < 20 * 60 * 1000) {
+    let done = false
+    let stalls = 0
+    let prevUp = -1
+    while (Date.now() - t0 < 25 * 60 * 1000) {
       await sleep(8000)
-      const txt = await page.evaluate(() => document.body?.innerText || '').catch(() => '')
-      const modalOpen = /UPLOAD CERTS/i.test(txt)
-      const m = txt.match(/Finished uploading\s+(\d+)\s+of\s+(\d+)\s+cards/i)
-      const saving = /\bSaving\b/i.test(txt)
-      if (m && `${m[1]}/${m[2]}` !== lastLog) { lastLog = `${m[1]}/${m[2]}`; log(`progress ${lastLog}${saving ? ' (saving…)' : ''}`) }
-      if (!modalOpen) break
-      if (m && m[1] === m[2] && !saving) break
+      const info = await page.evaluate(() => {
+        const t = document.body?.innerText || ''
+        const up = t.match(/Finished uploading\s+(\d+)\s+of\s+(\d+)/i)
+        const res = t.match(/([\d,]+)\s+results/i)
+        return { modal: /UPLOAD CERTS/i.test(t), upN: up ? +up[1] : null, upM: up ? +up[2] : null, saving: /\bSaving\b/i.test(t), results: res ? +res[1].replace(/,/g, '') : null }
+      }).catch(() => ({}))
+      const line = `up=${info.upN ?? '?'}/${info.upM ?? '?'}${info.saving ? ' saving' : ''} results=${info.results ?? '?'}`
+      if (line !== lastLog) { lastLog = line; log(`import ${line}`) }
+      // Truly done: modal reports all cards uploaded.
+      if (info.upN != null && info.upM != null && info.upN === info.upM) { done = true; break }
+      // Modal gone AND the collection already shows the full count.
+      if (!info.modal && info.results != null && info.results >= expected) { done = true; break }
+      // Detect a stall (counter not advancing) so we don't wait the full 25 min for nothing.
+      if (info.upN != null) { if (info.upN === prevUp) stalls++; else { stalls = 0; prevUp = info.upN } }
+      if (stalls >= 12) { log(`⚠ import stalled at ${info.upN}/${info.upM} — Card Ladder likely throttled this upload.`); break }
     }
+    if (!done) log(`⚠ import did NOT reach ${expected} — export may be incomplete.`)
     await closeModal()
     await sleep(1500)
 
