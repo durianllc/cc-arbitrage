@@ -39,7 +39,13 @@ const shot = async (page, label) => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const ctx = await launchContext('./browser-state-context', { headless: false, proxy: PROXIES[0] })
+// NO proxy here on purpose: the Card Ladder login's Cloudflare clearance was
+// earned on your real IP, and bulk upload is a single session (no per-cert rate
+// limit to dodge). Routing through a proxy = different IP = Cloudflare friction
+// for zero benefit. Pass --proxy N to force proxy N if you really want one.
+const pIdx = args.indexOf('--proxy')
+const proxy = pIdx !== -1 ? PROXIES[Number(args[pIdx + 1])] : undefined
+const ctx = await launchContext('./browser-state-context', { headless: false, proxy })
 const page = ctx.pages()[0] ?? await ctx.newPage()
 
 console.log(`Target collection: "${COLLECTION}" | file: ${filePath}`)
