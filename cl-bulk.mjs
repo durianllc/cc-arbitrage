@@ -59,13 +59,21 @@ try {
   await page.locator(':text("Create New Collection")').first().click({ timeout: 6000 })
   await sleep(1000)
   await shot(page, 'create-dialog')
-  // 3. Name it and confirm (Enter, plus a Save/Create button if present).
-  const nameInput = page.locator('input[type="text"]:visible, input:visible').first()
+  // 3. Name it + Create — SCOPED TO THE DIALOG so we don't type into the global
+  //    search bar (which would navigate to Sales). The dialog has the heading
+  //    "Create New Collection", a "Collection Name" input, and a Create button.
+  const dialog = page.locator('[role="dialog"]:visible, .modal:visible').filter({ hasText: 'Create New Collection' }).first()
+  const nameInput = dialog.locator('input:visible').first()
   await nameInput.fill(COLLECTION)
-  await page.locator('button:has-text("Create"), button:has-text("Save"), button[type="submit"]:visible').first()
-    .click({ timeout: 4000 }).catch(() => nameInput.press('Enter'))
+  await shot(page, 'name-filled')
+  await dialog.locator('button:has-text("Create")').first().click({ timeout: 5000 })
   await sleep(2500)
   await shot(page, 'collection-created')
+  // Safety: make sure we didn't get bounced to Sales.
+  if (!/\/collection/i.test(page.url())) {
+    await page.goto(`${CARD_LADDER_BASE}/collection`, { waitUntil: 'domcontentloaded' })
+    await sleep(3000)
+  }
 
   // ── Open the collection's "+" → Cert CSV ────────────────────────────────
   // Two "+" exist: the GLOBAL one in the very top bar opens "ADD SALE" (wrong).
