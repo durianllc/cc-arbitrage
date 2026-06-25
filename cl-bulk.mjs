@@ -15,7 +15,7 @@
  * Selectors are best-effort (CL's collection UI isn't documented here). Screens
  * land in ./debug/NN-step.png — share them if a step misbehaves.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve, basename } from 'node:path'
 import './config.mjs'
 import { launchContext, CARD_LADDER_BASE } from './browser.mjs'
@@ -170,14 +170,39 @@ try {
   }
   await shot(page, 'settings-open')
   await exportBtn.waitFor({ state: 'visible', timeout: 8000 })
-  console.log('Clicking Export CSV…')
-  const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: 30000 }),
-    exportBtn.click({ timeout: 6000 }),
-  ])
+
   const out = `./cert-upload/exports/${COLLECTION}-export.csv`
-  await download.saveAs(out)
-  console.log(`\n✅ Saved export → ${out}`)
+  // Capture the CSV two ways: (a) a real browser download event, and (b) the
+  // network response body in case CL returns the CSV inline. A 499-card export
+  // can take a while to generate, so give it up to 2 minutes.
+  let captured = null
+  const onResp = async (resp) => {
+    if (captured) return
+    try {
+      const ct = resp.headers()['content-type'] || ''
+      const cd = resp.headers()['content-disposition'] || ''
+      if (!/csv|octet-stream/i.test(ct) && !/attachment/i.test(cd) && !/export|\.csv/i.test(resp.url())) return
+      const txt = (await resp.body()).toString('utf8')
+      if (/Date Purchased|Graded Cert|Current Value/i.test(txt)) captured = txt
+    } catch { /* attachment bodies may be unavailable — download event handles it */ }
+  }
+  page.on('response', onResp)
+
+  console.log('Clicking Export CSV (waiting up to 2 min for the file)…')
+  const dlPromise = page.waitForEvent('download', { timeout: 120000 }).catch(() => null)
+  await exportBtn.click({ timeout: 6000 })
+  const download = await dlPromise
+
+  if (download) {
+    await download.saveAs(out)
+    console.log(`\n✅ Saved export (download) → ${out}`)
+  } else {
+    // No download event — wait a moment for the response capture to land.
+    for (let i = 0; i < 30 && !captured; i++) await sleep(1000)
+    if (!captured) { await shot(page, 'export-noresult'); throw new Error('Export produced no download or CSV response within timeout.') }
+    writeFileSync(out, captured)
+    console.log(`\n✅ Saved export (response) → ${out}`)
+  }
   console.log('Now run:  node analyze-exports.mjs')
 } catch (e) {
   console.error(`\n❌ Failed at step ${shotN}: ${e.message}`)
