@@ -150,13 +150,20 @@ try {
   await sleep(1500)
 
   // ── Export the collection (capture the download) ────────────────────────
-  console.log('Exporting collection CSV…')
-  await page.locator('i.material-icons:has-text("settings")').first().click({ timeout: 8000 }).catch(() => {})
-  await sleep(1500)
+  // Must press the gear (settings) first to reveal the Settings modal, which
+  // contains the "Export CSV" button.
+  console.log('Opening Settings (gear)…')
+  const exportBtn = page.locator('button:has-text("Export CSV")').first()
+  for (let attempt = 0; attempt < 3 && !(await exportBtn.count().catch(() => 0)); attempt++) {
+    await page.locator('i.material-icons:has-text("settings")').first().click({ timeout: 8000 }).catch(() => {})
+    await sleep(1500)
+  }
   await shot(page, 'settings-open')
+  await exportBtn.waitFor({ state: 'visible', timeout: 8000 })
+  console.log('Clicking Export CSV…')
   const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: 20000 }),
-    page.locator('button:has-text("Export CSV"), :text-is("Export CSV")').first().click({ timeout: 6000 }),
+    page.waitForEvent('download', { timeout: 30000 }),
+    exportBtn.click({ timeout: 6000 }),
   ])
   const out = `./cert-upload/exports/${COLLECTION}-export.csv`
   await download.saveAs(out)
