@@ -73,12 +73,21 @@ try {
   if (exportOnly) {
     // Select the existing collection by name, then jump straight to export.
     console.log(`Selecting existing collection "${COLLECTION}" (export-only)…`)
-    await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
-    await sleep(1200)
-    await shot(page, 'switcher-open')
-    // Click the collection's switcher row (robust: a dropdown <li> with the name).
-    await collRow(page, COLLECTION).click({ timeout: 6000 })
-    await sleep(3000)
+    // If it's ALREADY the active collection, the switcher dropdown won't list it
+    // (the active one is shown in the header, not the menu) — detect that and skip
+    // the switch, otherwise the row click times out.
+    const alreadyActive = await page.getByText(COLLECTION, { exact: true }).first()
+      .isVisible().catch(() => false)
+    if (alreadyActive) {
+      console.log(`  "${COLLECTION}" is already the active collection — skipping switch.`)
+    } else {
+      await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
+      await sleep(1200)
+      await shot(page, 'switcher-open')
+      // Click the collection's switcher row (robust: a dropdown <li> with the name).
+      await collRow(page, COLLECTION).click({ timeout: 6000 })
+      await sleep(3000)
+    }
     await shot(page, 'collection-selected')
   } else {
   // Prepare the target collection: select an existing one (--into) or create new.
