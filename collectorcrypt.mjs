@@ -60,6 +60,7 @@ export async function scrapeCards(categories, log = () => {}) {
         itemName: c.itemName,
         price: Number(price),
         currency: c.listing?.currency ?? 'USDC',
+        marketplace: c.listing?.marketplace ?? null, // 'CC' (native USD) or 'ME' (Magic Eden)
         gradingID: c.gradingID ?? null,
         gradingCompany: c.gradingCompany ?? null,
         grade: c.grade ?? null,

@@ -56,14 +56,21 @@ let skipped = 0
 for (const c of all) {
   const grader = GRADER_MAP[(c.gradingCompany ?? '').toUpperCase()]
   if (!grader || !c.gradingID) { skipped++; continue }
-  const priceUsd = (c.currency ?? '').toUpperCase() === 'SOL'
+  const isSol = (c.currency ?? '').toUpperCase() === 'SOL'
+  const priceUsd = isSol
     ? (solUsd ? Math.round(c.price * solUsd * 100) / 100 : null)
     : c.price
   if (priceUsd == null) { skipped++; continue }
+  // What this listing WOULD cost if the raw number were SOL. For SOL listings this
+  // equals cc_price; for USD-labeled listings it's the "what if mislabeled" price.
+  // The analyzer uses it to catch SOL listings the API mislabels as USDC (which
+  // otherwise look like impossibly cheap deals).
+  const solInterp = isSol ? priceUsd : (solUsd ? Math.round(c.price * solUsd * 100) / 100 : null)
   rows.push({ cert: String(c.gradingID), grader, priceUsd, name: c.itemName, nft: c.nftAddress })
   // Key by cert|grader to match Card Ladder rows back later.
   mapping[`${c.gradingID}|${grader}`] = {
     cc_price: priceUsd, name: c.itemName, nft: c.nftAddress, category: c.category, grade: c.grade,
+    currency: c.currency ?? null, marketplace: c.marketplace ?? null, sol_interp: solInterp,
   }
 }
 console.log(`${rows.length} eligible cards; skipped ${skipped}.`)
