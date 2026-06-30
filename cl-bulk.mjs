@@ -93,11 +93,19 @@ try {
   // Prepare the target collection: select an existing one (--into) or create new.
   if (into) {
     console.log(`Selecting existing collection "${into}" to upload into…`)
-    await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
-    await sleep(1200)
-    await shot(page, 'switcher-open')
-    await collRow(page, into).click({ timeout: 6000 })
-    await sleep(3000)
+    // If it's already the active collection it won't be in the switcher dropdown
+    // (the active one shows in the header, not the menu) — skip the switch, else
+    // the row click times out. Same fix as the export-only path.
+    const alreadyActive = await page.getByText(into, { exact: true }).first().isVisible().catch(() => false)
+    if (alreadyActive) {
+      console.log(`  "${into}" is already the active collection — skipping switch.`)
+    } else {
+      await page.locator('i.material-icons:has-text("expand_more")').first().click({ timeout: 8000 })
+      await sleep(1200)
+      await shot(page, 'switcher-open')
+      await collRow(page, into).click({ timeout: 6000 })
+      await sleep(3000)
+    }
     await shot(page, 'collection-selected')
   } else {
     console.log(`Creating new collection "${COLLECTION}"…`)
