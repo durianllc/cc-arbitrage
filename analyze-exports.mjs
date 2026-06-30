@@ -114,9 +114,13 @@ for (const f of files) {
     // a normal market price (≥50% of CL), it's almost certainly a mislabeled SOL
     // listing — drop it rather than post a bogus deal. (A genuine 42%-off card like
     // a $70 vs $120 listing is NOT extreme, so real deals are unaffected.)
+    // A genuine SOL-mislabel lands NEAR market value (a seller pricing roughly at
+    // the card's worth). Require the SOL-interpretation to sit in a plausible BAND
+    // around CL [0.5×, 4×]: if it's wildly above (e.g. 16× CL), the SOL reading is
+    // absurd too, so the cheap USD price is the real one — a genuine steal, keep it.
     const sol = m.sol_interp
     const usdLabeled = (m.currency ?? '').toUpperCase() !== 'SOL'
-    if (usdLabeled && sol && ratio <= 0.25 && sol >= 0.5 * clValue) {
+    if (usdLabeled && sol && ratio <= 0.25 && sol >= 0.5 * clValue && sol <= 4 * clValue) {
       suspects.push({ name: m.name, cc_price: m.cc_price, sol_interp: sol, cl: clValue })
       continue
     }
