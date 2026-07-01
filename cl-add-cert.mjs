@@ -119,17 +119,34 @@ try {
   console.log('Clicking Submit…')
   await page.locator('button:has-text("Submit"):visible').first().click({ timeout: 6000 })
   console.log('Submitted — waiting for Card Ladder to fetch the cert…')
-  await sleep(5000)
-  await shot(page, 'submitted')
 
-  // Card Ladder shows a toast: red "No information on this Cert" (not found) or a
-  // success confirmation. Read it so callers know whether the add actually took.
-  const bodyText = await page.evaluate(() => document.body?.innerText || '').catch(() => '')
-  if (/No information on this Cert/i.test(bodyText)) {
+  // Two outcomes: a red "No information on this Cert" toast (not found), OR the
+  // detail form loads (card pulled from the grader) with a green "Add" button that
+  // must be clicked to finalize. Poll for whichever appears.
+  const addBtn = page.getByRole('button', { name: 'Add', exact: true })
+  const notFound = page.getByText(/No information on this Cert/i)
+  let outcome = null
+  for (let i = 0; i < 30 && !outcome; i++) {
+    if (await notFound.count().catch(() => 0)) outcome = 'notfound'
+    else if (await addBtn.isVisible().catch(() => false)) outcome = 'form'
+    else await sleep(500)
+  }
+  await shot(page, 'after-submit')
+
+  if (outcome === 'notfound') {
     console.log(`\n⚠ NOT FOUND — Card Ladder has no data for cert ${CERT} (${GRADER}). Nothing added.`)
     await ctx.close().catch(() => {})
     process.exit(2) // distinct code so the monitor can stop retrying this cert
   }
+  if (outcome !== 'form') {
+    throw new Error('Neither the detail form nor a "not found" toast appeared after Submit.')
+  }
+
+  // Detail form loaded — make sure it targets the right collection, then finalize.
+  console.log('Cert loaded — clicking "Add" to finalize…')
+  await addBtn.click({ timeout: 6000 })
+  await sleep(3000)
+  await shot(page, 'added')
   console.log(`\n✅ Added cert ${CERT} (${GRADER}) to "${COLLECTION}".`)
 } catch (e) {
   console.error(`\n❌ Failed at step ${shotN}: ${e.message}`)
