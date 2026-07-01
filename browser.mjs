@@ -27,8 +27,19 @@
  */
 
 import { chromium } from 'playwright'
+import { rmSync } from 'node:fs'
+import { join } from 'node:path'
 
 export const CARD_LADDER_BASE = process.env.CARD_LADDER_BASE ?? 'https://app.cardladder.com'
+
+// Cross-platform replacement for `pkill -f browser-state-context`: a crashed run
+// leaves Chromium singleton locks in the profile dir that block the next launch.
+// Remove them before launching (safe because we run browser tasks sequentially).
+function clearProfileLocks(contextDir) {
+  for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile']) {
+    rmSync(join(contextDir, f), { force: true })
+  }
+}
 
 // Optional residential proxy. A per-launch `proxy` object ({server, username,
 // password}) takes priority; otherwise we fall back to PROXY_SERVER env vars.
@@ -70,6 +81,7 @@ async function launch(contextDir, opts) {
 }
 
 export async function launchContext(contextDir, { headless, proxy } = {}) {
+  clearProfileLocks(contextDir)
   const override = process.env.CARD_LADDER_UA || undefined
   let ctx = await launch(contextDir, baseOpts(headless, override, proxy))
 
