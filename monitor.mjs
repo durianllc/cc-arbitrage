@@ -38,6 +38,7 @@ const GRADER_MAP = { PSA: 'PSA', BGS: 'BGS', BECKETT: 'BGS', 'BECKETT (BGS)': 'B
 
 const SNAP = './cc-snapshot.json'
 const CLV = './cl-values.json'
+const NOTFOUND = './cl-notfound.json' // certs Card Ladder has no data for — don't retry forever
 const POSTED = './posted-deals.json'
 const EXPORT = './cert-upload/exports/ARBALL-export.csv'
 const ccUrl = (nft) => `https://collectorcrypt.com/assets/solana/${nft}`
@@ -92,11 +93,12 @@ async function main() {
   const firstRun = !existsSync(SNAP)
 
   // 2. Classify.
-  const newKeys = []      // certs we have no CL value for (never loaded)
+  const notfound = loadJson(NOTFOUND) // cert -> true (CL has no data; skip)
+  const newKeys = []      // certs we have no CL value for (never loaded) and not known-notfound
   const changedKeys = []  // price changed vs snapshot
   for (const [k, cur] of Object.entries(current)) {
     const cert = cur.cert
-    if (clValues[cert] == null) newKeys.push(k)
+    if (clValues[cert] == null) { if (!notfound[cert]) newKeys.push(k) }
     else if (snapshot[k] != null && Math.abs(snapshot[k] - cur.cc_price) > 0.01) changedKeys.push(k)
   }
   console.log(`${newKeys.length} new cert(s), ${changedKeys.length} price change(s).`)
@@ -118,9 +120,11 @@ async function main() {
         const cur = current[k]
         const r = await addOneCert(page, { cert: cur.cert, grader: cur.grader }).catch(() => 'error')
         if (r === 'added') added++
+        else if (r === 'notfound') { notfound[cur.cert] = true } // never retry
         console.log(`  add ${cur.grader} ${cur.cert}: ${r}`)
       }
       await ctx.close().catch(() => {})
+      writeFileSync(NOTFOUND, JSON.stringify(notfound, null, 2))
       console.log(`Added ${added}/${toAdd.length}. Re-exporting ARBALL…`)
       execSync('pkill -9 -f browser-state-context; sleep 2; NO_WAIT=1 node cl-bulk.mjs --export-only --collection ARBALL; pkill -9 -f browser-state-context; sleep 1', { stdio: 'ignore', shell: '/bin/bash' })
       clValues = parseExportToClValues(EXPORT)
