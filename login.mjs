@@ -42,6 +42,10 @@ if (profile != null) {
   proxy = PROXIES[0] // single-proxy mode (or undefined for direct)
 }
 
+// Make it obvious whether a proxy is actually being used.
+console.log(`Loaded ${PROXIES.length} proxy(ies) from config.`)
+console.log(proxy ? `→ Logging in THROUGH proxy: ${proxy.server}` : '→ Logging in DIRECT (no proxy). Create proxy.txt in this folder to use one.')
+
 let ctx
 try {
   // CARDLADDER-APP-2: real Chrome + anti-automation flags to clear Cloudflare.
