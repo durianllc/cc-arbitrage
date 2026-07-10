@@ -43,7 +43,7 @@ if (existsSync('settings.txt')) {
 
 // 4. proxy.txt — one proxy line → PROXY_SERVER / PROXY_USERNAME / PROXY_PASSWORD.
 if (existsSync('proxy.txt')) {
-  const line = readFileSync('proxy.txt', 'utf8').split(/\r?\n/).map(s => s.trim()).find(s => s && !s.startsWith('#'))
+  const line = readFileSync('proxy.txt', 'utf8').replace(/^﻿/, '').split(/\r?\n/).map(s => s.trim()).find(s => s && !s.startsWith('#'))
   if (line) {
     const parsed = parseProxy(line)
     if (parsed) {
@@ -64,9 +64,11 @@ if (existsSync('proxy.txt')) {
  */
 export const PROXIES = (() => {
   if (existsSync('proxies.txt')) {
-    return readFileSync('proxies.txt', 'utf8')
+    const list = readFileSync('proxies.txt', 'utf8').replace(/^﻿/, '')
       .split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))
       .map(parseProxy).filter(Boolean)
+    if (list.length) return list // only use proxies.txt if it has valid entries;
+    // otherwise fall through to a single proxy.txt / PROXY_SERVER below.
   }
   if (process.env.PROXY_SERVER) {
     return [{
