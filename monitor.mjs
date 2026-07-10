@@ -23,6 +23,7 @@ import './config.mjs'
 import { scrapeCards } from './collectorcrypt.mjs'
 import { launchContext, CARD_LADDER_BASE } from './browser.mjs'
 import { selectCollection, addOneCert, exportCollection } from './cl-cert-flow.mjs'
+import { lookupCardLadder } from './cardladder.mjs'
 import { postBuysToDiscord } from './discord.mjs'
 
 const args = process.argv.slice(2)
@@ -41,6 +42,7 @@ const GRADER_MAP = { PSA: 'PSA', BGS: 'BGS', BECKETT: 'BGS', 'BECKETT (BGS)': 'B
 const SNAP = './cc-snapshot.json'
 const CLV = './cl-values.json'
 const NOTFOUND = './cl-notfound.json'
+const LINKS = './cl-links.json' // cert|grader -> real Card Ladder deep-link (profileId URL)
 const POSTED = './posted-deals.json'
 const EXPORT = './cert-upload/exports/ARBALL-export.csv'
 const ccUrl = (nft) => `https://collectorcrypt.com/assets/solana/${nft}`
@@ -101,25 +103,32 @@ async function main() {
   }
   console.log(`${newKeys.length} new cert(s), ${changedKeys.length} price change(s).`)
 
-  // 3. Add new certs + refresh CL values (one browser session, in-process).
+  // Lazy shared browser — add, export, and link enrichment reuse one session.
+  let ctx = null, page = null
+  async function ensureBrowser() {
+    if (page) return page
+    ctx = await launchContext('./browser-state-context', { headless: true })
+    page = ctx.pages()[0] ?? await ctx.newPage()
+    page.on('dialog', (d) => d.accept().catch(() => {}))
+    await page.goto(`${CARD_LADDER_BASE}/collection`, { waitUntil: 'domcontentloaded' })
+    await sleep(4000)
+    if (/\/login(\?|$)/i.test(page.url())) throw new Error('not logged in — run `node login.mjs`')
+    return page
+  }
+
+  // 3. Add new certs + refresh CL values.
   const exportAgeH = existsSync(EXPORT) ? (Date.now() - statSync(EXPORT).mtimeMs) / 3.6e6 : Infinity
   const needRefresh = exportAgeH > REFRESH_HOURS
   const toAdd = firstRun ? [] : newKeys.slice(0, MAX_ADD)
   if (toAdd.length || (needRefresh && !firstRun)) {
     if (newKeys.length > MAX_ADD) console.log(`Adding first ${MAX_ADD} of ${newKeys.length} new (rest next cycle).`)
-    let ctx
     try {
-      ctx = await launchContext('./browser-state-context', { headless: true })
-      const page = ctx.pages()[0] ?? await ctx.newPage()
-      page.on('dialog', (d) => d.accept().catch(() => {}))
-      await page.goto(`${CARD_LADDER_BASE}/collection`, { waitUntil: 'domcontentloaded' })
-      await sleep(4000)
-      if (/\/login(\?|$)/i.test(page.url())) throw new Error('not logged in — run `node login.mjs`')
-      await selectCollection(page, COLL)
+      const p = await ensureBrowser()
+      await selectCollection(p, COLL)
       let added = 0
       for (const k of toAdd) {
         const cur = current[k]
-        const r = await addOneCert(page, { cert: cur.cert, grader: cur.grader }).catch(() => 'error')
+        const r = await addOneCert(p, { cert: cur.cert, grader: cur.grader }).catch(() => 'error')
         if (r === 'added') added++
         else if (r === 'notfound') notfound[cur.cert] = true
         console.log(`  add ${cur.grader} ${cur.cert}: ${r}`)
@@ -127,14 +136,12 @@ async function main() {
       writeFileSync(NOTFOUND, JSON.stringify(notfound, null, 2))
       if (added > 0 || needRefresh) {
         console.log(`Re-exporting ARBALL (added ${added}${needRefresh ? ', daily refresh' : ''})…`)
-        await exportCollection(page, EXPORT)
+        await exportCollection(p, EXPORT)
         clValues = parseExportToClValues(EXPORT)
         writeFileSync(CLV, JSON.stringify(clValues, null, 2))
       }
     } catch (e) {
-      console.warn(`Add/export step failed (${e.message}). Price-change checks still run on cached values.`)
-    } finally {
-      if (ctx) await ctx.close().catch(() => {})
+      console.warn(`Add/export step failed (${e.message}). Continuing with cached values.`)
     }
   }
 
@@ -142,6 +149,7 @@ async function main() {
   //    below decides what to post — so a discount that shifts because the CC
   //    price OR the CL value moved both get caught, and unchanged ones are skipped.
   const posted = loadJson(POSTED)
+  const links = loadJson(LINKS)
   const deals = []
   for (const [k, cur] of Object.entries(current)) {
     const cl = clValues[cur.cert]
@@ -156,10 +164,25 @@ async function main() {
       const prevPct = 1 - prev.cc_price / prev.cl_value
       if (Math.abs(pct - prevPct) < MIN_PCT_CHANGE) continue
     }
-    deals.push({ key: k, name: cur.name, category: cur.category, grader: cur.grader, grade: cur.grade, cc_price: cur.cc_price, card_ladder_value: cl, discount_pct: pct, cc_url: ccUrl(cur.nft), cl_url: clUrl(cur.name) })
+    deals.push({ key: k, cert: cur.cert, name: cur.name, category: cur.category, grader: cur.grader, grade: cur.grade, cc_price: cur.cc_price, card_ladder_value: cl, discount_pct: pct, cc_url: ccUrl(cur.nft), cl_url: links[k] || clUrl(cur.name) })
   }
   deals.sort((a, b) => b.discount_pct - a.discount_pct)
   console.log(`${deals.length} deal(s) to post${firstRun ? ' (suppressed on first run)' : ''}.`)
+
+  // 4b. Enrich real Card Ladder deep-links (cert → profileId URL) so each deal's
+  //     link jumps straight to the card's value. Cached — each cert is looked up once.
+  if (!firstRun && deals.length) {
+    let enriched = 0
+    for (const d of deals) {
+      if (links[d.key]) { d.cl_url = links[d.key]; continue }
+      try {
+        const p = await ensureBrowser()
+        const res = await lookupCardLadder(p, { certNumber: d.cert, grader: d.grader })
+        if (res?.url) { links[d.key] = res.url; d.cl_url = res.url; enriched++ }
+      } catch { /* keep the fallback search link */ }
+    }
+    if (enriched) { writeFileSync(LINKS, JSON.stringify(links, null, 2)); console.log(`Enriched ${enriched} Card Ladder deep-link(s).`) }
+  }
 
   // 5. Post (skip on first run).
   if (!firstRun && deals.length) {
@@ -168,6 +191,9 @@ async function main() {
     for (const d of deals) posted[d.key] = { firstPosted: posted[d.key]?.firstPosted ?? now, lastPosted: now, cc_price: d.cc_price, cl_value: d.card_ladder_value }
     writeFileSync(POSTED, JSON.stringify(posted, null, 2))
   }
+
+  // Close the shared browser session (if one was opened).
+  if (ctx) await ctx.close().catch(() => {})
 
   // 6. Save snapshot (NATIVE prices) + CL values.
   const snapOut = {}

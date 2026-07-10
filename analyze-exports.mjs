@@ -76,6 +76,7 @@ const mapping = JSON.parse(readFileSync('./cert-upload/mapping.json', 'utf8'))
 // Optional: reuse Card Ladder deep-links cached from prior live lookups so the
 // Discord embed can show a "Card Ladder" link (the export has no CL URL).
 const cache = existsSync('./cache.json') ? JSON.parse(readFileSync('./cache.json', 'utf8')) : {}
+const links = existsSync('./cl-links.json') ? JSON.parse(readFileSync('./cl-links.json', 'utf8')) : {}
 // cert-only index as a fallback when the export lacks a grader column.
 const byCert = {}
 for (const [k, v] of Object.entries(mapping)) byCert[k.split('|')[0]] = { ...v, grader: k.split('|')[1] }
@@ -129,10 +130,10 @@ for (const f of files) {
       name: m.name, category: m.category, grader: m.grader, grade: m.grade,
       cc_price: m.cc_price, card_ladder_value: clValue, discount_pct: 1 - ratio,
       cc_url: ccUrl(m.nft),
-      // Prefer a cached CL deep-link; otherwise a Card Ladder sales search for
-      // the card name so every deal has a clickable Card Ladder link.
-      cl_url: cache[`${cert}|${m.grader}`]?.clUrl
-        ?? `https://app.cardladder.com/sales-history?direction=desc&sort=date&search=${encodeURIComponent(m.name)}`,
+      // Prefer a real cached CL deep-link (from cl-links.json, populated by the
+      // monitor's cert lookups, or the old cache.json); else a name search.
+      cl_url: links[`${cert}|${m.grader}`] || cache[`${cert}|${m.grader}`]?.clUrl
+        || `https://app.cardladder.com/sales-history?direction=desc&sort=date&search=${encodeURIComponent(m.name)}`,
     })
   }
 }
