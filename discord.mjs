@@ -8,13 +8,18 @@
  * page, with grader/grade/prices as fields and a Card Ladder link in the body.
  */
 
-// Read at CALL time, not module-load time: config.mjs uses top-level await, so
-// reading process.env when this module first evaluates can race ahead of the
-// env var being set. A getter sidesteps the import-ordering hazard entirely.
-const webhook = () => process.env.DISCORD_WEBHOOK_URL
-
-// One deal per message (not batched), so each is its own Discord message.
-const PER_MSG = 1
+// Read env at CALL time (config.mjs uses top-level await, so reading at module
+// load can race ahead of the env being set).
+// Deals route by CC price: < PRICE_SPLIT → LOW webhook, >= → HIGH webhook.
+// DISCORD_WEBHOOK_URL is the fallback if a LOW/HIGH one is missing.
+const PRICE_SPLIT = 200
+const webhookFor = (ccPrice) => {
+  const low = process.env.DISCORD_WEBHOOK_LOW
+  const high = process.env.DISCORD_WEBHOOK_HIGH
+  const fb = process.env.DISCORD_WEBHOOK_URL
+  return (Number(ccPrice) < PRICE_SPLIT ? low : high) || fb
+}
+const anyWebhook = () => process.env.DISCORD_WEBHOOK_HIGH || process.env.DISCORD_WEBHOOK_LOW || process.env.DISCORD_WEBHOOK_URL
 
 function embedFor(r) {
   return {
@@ -34,40 +39,35 @@ function embedFor(r) {
   }
 }
 
-async function postBatch(embeds) {
-  const res = await fetch(webhook(), {
+async function postOne(url, embed) {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ embeds }),
+    body: JSON.stringify({ embeds: [embed] }),
   })
   if (res.status === 429) {
-    // Rate limited — wait the suggested time and retry once.
     const retry = Number(res.headers.get('retry-after') ?? 1) * 1000
     await new Promise((r) => setTimeout(r, retry + 250))
-    return postBatch(embeds)
+    return postOne(url, embed)
   }
-  if (!res.ok) {
-    throw new Error(`Discord webhook ${res.status}: ${await res.text().catch(() => '')}`)
-  }
+  if (!res.ok) throw new Error(`Discord webhook ${res.status}: ${await res.text().catch(() => '')}`)
 }
 
 /**
+ * Post each deal as its own message, routed by CC price to the LOW/HIGH webhook.
  * @param {Array} buys rows with { name, cc_url, cl_url, grader, grade, category, cc_price, card_ladder_value, discount_pct }
  * @param {(msg: string) => void} [log]
  */
 export async function postBuysToDiscord(buys, log = () => {}) {
-  if (!webhook()) {
-    log('DISCORD_WEBHOOK_URL not set — skipping Discord post.')
-    return
+  if (!anyWebhook()) { log('No Discord webhook set (LOW/HIGH/URL) — skipping.'); return }
+  if (!buys.length) { log('No BUY hits to post to Discord.'); return }
+  let low = 0, high = 0, skipped = 0
+  for (const b of buys) {
+    const url = webhookFor(b.cc_price)
+    if (!url) { skipped++; continue }
+    await postOne(url, embedFor(b))
+    if (Number(b.cc_price) < PRICE_SPLIT) low++; else high++
+    await new Promise((r) => setTimeout(r, 600)) // gentle pacing
   }
-  if (!buys.length) {
-    log('No BUY hits to post to Discord.')
-    return
-  }
-  for (let i = 0; i < buys.length; i += PER_MSG) {
-    const batch = buys.slice(i, i + PER_MSG)
-    await postBatch(batch.map(embedFor))
-    await new Promise((r) => setTimeout(r, 600)) // gentle pacing between messages
-  }
-  log(`Posted ${buys.length} BUY hit${buys.length === 1 ? '' : 's'} to Discord.`)
+  log(`Posted ${low + high} deal(s) → LOW(<$${PRICE_SPLIT}): ${low}, HIGH(≥$${PRICE_SPLIT}): ${high}${skipped ? `, skipped ${skipped} (no webhook)` : ''}.`)
 }
