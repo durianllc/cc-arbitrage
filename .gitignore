@@ -11,3 +11,8 @@ proxies.txt
 cert-upload/
 debug/
 .DS_Store
+cc-snapshot.json
+cl-values.json
+cl-notfound.json
+posted-deals.json
+current-deals.csv

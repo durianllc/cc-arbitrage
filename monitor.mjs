@@ -1,44 +1,42 @@
 #!/usr/bin/env node
 /**
- * 15-minute Collector Crypt ↔ Card Ladder monitor (one cycle per run).
+ * Collector Crypt ↔ Card Ladder monitor (one cycle per run). Cross-platform
+ * (pure Node — no shell/pkill), so it runs on Windows/Linux/macOS servers.
  *
  * Each run:
- *   1. Scrape CC now; diff against the saved price snapshot (cc-snapshot.json).
- *   2. NEW certs (never loaded) → add each into ARBALL via the single "Add Cert"
- *      flow, then re-export ARBALL to learn their Card Ladder values.
- *   3. PRICE CHANGES on existing certs → re-check against the known CL value.
- *   4. Any card now ≤ threshold (default 80% of CL) → post to Discord.
- *      Deduped, but re-posts a card if its CC price DROPPED further since last post.
- *   5. Save the new snapshot + CL values.
- *
- * State: cc-snapshot.json (last CC prices), cl-values.json (known CL values),
- * posted-deals.json (shared dedup).
+ *   1. Scrape CC now; diff NATIVE prices against cc-snapshot.json (native, so
+ *      SOL/USD rate wobble doesn't create phantom "price changes").
+ *   2. NEW certs (never loaded, not known-notfound) → single-add into ARBALL.
+ *   3. If anything was added OR the CL export is >20h old → re-export ARBALL to
+ *      refresh Card Ladder values (CL re-values daily on its own).
+ *   4. NEW + PRICE-CHANGED certs now ≤ threshold (default 80% of CL) → post to
+ *      Discord. Deduped, but re-posts if the CC price DROPPED further.
+ *   5. Save snapshot + CL values.
  *
  *   node monitor.mjs                 # one cycle
  *   node monitor.mjs --threshold 0.8 --max-add 40
  *
- * Run every 15 min via monitor-loop.sh (or launchd). First run seeds baselines
- * from the current ARBALL export and posts little/nothing.
+ * Loop it with:  node monitor-loop.mjs   (every 15 min, cross-platform)
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { execSync } from 'node:child_process'
+import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import './config.mjs'
 import { scrapeCards } from './collectorcrypt.mjs'
 import { launchContext, CARD_LADDER_BASE } from './browser.mjs'
-import { selectCollection, addOneCert } from './cl-cert-flow.mjs'
+import { selectCollection, addOneCert, exportCollection } from './cl-cert-flow.mjs'
 import { postBuysToDiscord } from './discord.mjs'
 
 const args = process.argv.slice(2)
 const numArg = (f, d) => { const i = args.indexOf(f); return i !== -1 ? Number(args[i + 1]) : d }
 const THRESH = numArg('--threshold', 0.8)
-const MAX_ADD = numArg('--max-add', 40)      // cap single-adds per cycle (bounds time)
+const MAX_ADD = numArg('--max-add', 40)
+const REFRESH_HOURS = numArg('--refresh-hours', 20) // re-export CL values at least this often
 const COLL = 'ARBALL'
 const CATS = ['Pokemon', 'One Piece']
 const GRADER_MAP = { PSA: 'PSA', BGS: 'BGS', BECKETT: 'BGS', 'BECKETT (BGS)': 'BGS', CGC: 'CGC', SGC: 'SGC' }
 
 const SNAP = './cc-snapshot.json'
 const CLV = './cl-values.json'
-const NOTFOUND = './cl-notfound.json' // certs Card Ladder has no data for — don't retry forever
+const NOTFOUND = './cl-notfound.json'
 const POSTED = './posted-deals.json'
 const EXPORT = './cert-upload/exports/ARBALL-export.csv'
 const ccUrl = (nft) => `https://collectorcrypt.com/assets/solana/${nft}`
@@ -50,7 +48,6 @@ async function getSolUsd() {
   try { const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'); if (!r.ok) return null; const v = (await r.json())?.solana?.usd; return Number.isFinite(v) && v > 0 ? v : null } catch { return null }
 }
 
-// Minimal CSV parse for the ARBALL export (cert + Current Value columns).
 function parseExportToClValues(path) {
   if (!existsSync(path)) return {}
   const t = readFileSync(path, 'utf8')
@@ -65,7 +62,7 @@ function parseExportToClValues(path) {
   for (const row of rows.slice(1)) {
     const cert = (row[ci] || '').trim()
     const v = parseFloat(String(row[vi] || '').replace(/[^0-9.]/g, ''))
-    if (cert && Number.isFinite(v) && v > 0) out[cert] = v // keyed by cert only (export has no grader col)
+    if (cert && Number.isFinite(v) && v > 0) out[cert] = v
   }
   return out
 }
@@ -73,42 +70,42 @@ function parseExportToClValues(path) {
 async function main() {
   console.log(`\n=== monitor ${new Date().toISOString()} ===`)
 
-  // 1. Scrape CC now.
+  // 1. Scrape CC.
   const all = await scrapeCards(CATS, () => {})
   const solUsd = all.some((c) => (c.currency ?? '').toUpperCase() === 'SOL') ? await getSolUsd() : null
-  const current = {} // key cert|grader -> { cc_price, cert, grader, name, nft, grade, category, currency }
+  const current = {} // key -> { cc_price(USD), raw(native), cert, grader, name, nft, grade, category }
   for (const c of all) {
     const grader = GRADER_MAP[(c.gradingCompany ?? '').toUpperCase()]
     if (!grader || !c.gradingID) continue
     const isSol = (c.currency ?? '').toUpperCase() === 'SOL'
-    const price = isSol ? (solUsd ? Math.round(c.price * solUsd * 100) / 100 : null) : c.price
-    if (price == null) continue
-    current[`${c.gradingID}|${grader}`] = { cc_price: price, cert: String(c.gradingID), grader, name: c.itemName, nft: c.nftAddress, grade: c.grade, category: c.category }
+    const usd = isSol ? (solUsd ? Math.round(c.price * solUsd * 100) / 100 : null) : c.price
+    if (usd == null) continue
+    current[`${c.gradingID}|${grader}`] = { cc_price: usd, raw: c.price, cert: String(c.gradingID), grader, name: c.itemName, nft: c.nftAddress, grade: c.grade, category: c.category }
   }
   console.log(`Scraped ${Object.keys(current).length} eligible CC listings.`)
 
-  const snapshot = loadJson(SNAP)          // key -> last cc_price
-  let clValues = existsSync(CLV) ? loadJson(CLV) : parseExportToClValues(EXPORT) // cert -> CL value
-  if (!Object.keys(clValues).length) console.warn('No CL values yet — run daily.sh / an export first to seed cl-values.')
+  const snapshot = loadJson(SNAP)   // key -> last NATIVE price
+  let clValues = existsSync(CLV) ? loadJson(CLV) : parseExportToClValues(EXPORT)
+  const notfound = loadJson(NOTFOUND)
   const firstRun = !existsSync(SNAP)
 
-  // 2. Classify.
-  const notfound = loadJson(NOTFOUND) // cert -> true (CL has no data; skip)
-  const newKeys = []      // certs we have no CL value for (never loaded) and not known-notfound
-  const changedKeys = []  // price changed vs snapshot
+  // 2. Classify (compare NATIVE prices → no SOL-rate phantom changes).
+  const newKeys = [], changedKeys = []
   for (const [k, cur] of Object.entries(current)) {
-    const cert = cur.cert
-    if (clValues[cert] == null) { if (!notfound[cert]) newKeys.push(k) }
-    else if (snapshot[k] != null && Math.abs(snapshot[k] - cur.cc_price) > 0.01) changedKeys.push(k)
+    if (clValues[cur.cert] == null) { if (!notfound[cur.cert]) newKeys.push(k) }
+    else if (snapshot[k] != null && Math.abs(snapshot[k] - cur.raw) > Math.max(0.01, snapshot[k] * 0.001)) changedKeys.push(k)
   }
   console.log(`${newKeys.length} new cert(s), ${changedKeys.length} price change(s).`)
 
-  // 3. Add NEW certs to ARBALL (single-add), then re-export to learn values.
-  if (newKeys.length && !firstRun) {
-    const toAdd = newKeys.slice(0, MAX_ADD)
+  // 3. Add new certs + refresh CL values (one browser session, in-process).
+  const exportAgeH = existsSync(EXPORT) ? (Date.now() - statSync(EXPORT).mtimeMs) / 3.6e6 : Infinity
+  const needRefresh = exportAgeH > REFRESH_HOURS
+  const toAdd = firstRun ? [] : newKeys.slice(0, MAX_ADD)
+  if (toAdd.length || (needRefresh && !firstRun)) {
     if (newKeys.length > MAX_ADD) console.log(`Adding first ${MAX_ADD} of ${newKeys.length} new (rest next cycle).`)
+    let ctx
     try {
-      const ctx = await launchContext('./browser-state-context', { headless: true })
+      ctx = await launchContext('./browser-state-context', { headless: true })
       const page = ctx.pages()[0] ?? await ctx.newPage()
       page.on('dialog', (d) => d.accept().catch(() => {}))
       await page.goto(`${CARD_LADDER_BASE}/collection`, { waitUntil: 'domcontentloaded' })
@@ -120,39 +117,40 @@ async function main() {
         const cur = current[k]
         const r = await addOneCert(page, { cert: cur.cert, grader: cur.grader }).catch(() => 'error')
         if (r === 'added') added++
-        else if (r === 'notfound') { notfound[cur.cert] = true } // never retry
+        else if (r === 'notfound') notfound[cur.cert] = true
         console.log(`  add ${cur.grader} ${cur.cert}: ${r}`)
       }
-      await ctx.close().catch(() => {})
       writeFileSync(NOTFOUND, JSON.stringify(notfound, null, 2))
-      console.log(`Added ${added}/${toAdd.length}. Re-exporting ARBALL…`)
-      execSync('pkill -9 -f browser-state-context; sleep 2; NO_WAIT=1 node cl-bulk.mjs --export-only --collection ARBALL; pkill -9 -f browser-state-context; sleep 1', { stdio: 'ignore', shell: '/bin/bash' })
-      clValues = parseExportToClValues(EXPORT)
-      writeFileSync(CLV, JSON.stringify(clValues, null, 2))
+      if (added > 0 || needRefresh) {
+        console.log(`Re-exporting ARBALL (added ${added}${needRefresh ? ', daily refresh' : ''})…`)
+        await exportCollection(page, EXPORT)
+        clValues = parseExportToClValues(EXPORT)
+        writeFileSync(CLV, JSON.stringify(clValues, null, 2))
+      }
     } catch (e) {
-      console.warn(`Add/export step failed (${e.message}). Price-change checks still run.`)
+      console.warn(`Add/export step failed (${e.message}). Price-change checks still run on cached values.`)
+    } finally {
+      if (ctx) await ctx.close().catch(() => {})
     }
   }
 
-  // 4. Build deals from new + changed certs that now have a CL value.
+  // 4. Deals from new + changed certs.
   const posted = loadJson(POSTED)
-  const candidateKeys = [...new Set([...newKeys, ...changedKeys])]
   const deals = []
-  for (const k of candidateKeys) {
+  for (const k of [...new Set([...newKeys, ...changedKeys])]) {
     const cur = current[k]
     const cl = clValues[cur.cert]
     if (cl == null) continue
     const ratio = cur.cc_price / cl
     if (ratio > THRESH) continue
-    // Post if never posted, or price dropped ≥2% below the last posted price.
     const prev = posted[k]
-    if (prev && cur.cc_price >= prev.cc_price * 0.98) continue
+    if (prev && cur.cc_price >= prev.cc_price * 0.98) continue // already posted, no meaningful drop
     deals.push({ key: k, name: cur.name, category: cur.category, grader: cur.grader, grade: cur.grade, cc_price: cur.cc_price, card_ladder_value: cl, discount_pct: 1 - ratio, cc_url: ccUrl(cur.nft), cl_url: clUrl(cur.name) })
   }
   deals.sort((a, b) => b.discount_pct - a.discount_pct)
   console.log(`${deals.length} deal(s) to post${firstRun ? ' (suppressed on first run)' : ''}.`)
 
-  // 5. Post (skip on first run — just establish baselines).
+  // 5. Post (skip on first run).
   if (!firstRun && deals.length) {
     await postBuysToDiscord(deals, (m) => console.log(m))
     const now = new Date().toISOString()
@@ -160,9 +158,9 @@ async function main() {
     writeFileSync(POSTED, JSON.stringify(posted, null, 2))
   }
 
-  // 6. Save snapshot (all current prices) + cl-values.
+  // 6. Save snapshot (NATIVE prices) + CL values.
   const snapOut = {}
-  for (const [k, v] of Object.entries(current)) snapOut[k] = v.cc_price
+  for (const [k, v] of Object.entries(current)) snapOut[k] = v.raw
   writeFileSync(SNAP, JSON.stringify(snapOut, null, 2))
   writeFileSync(CLV, JSON.stringify(clValues, null, 2))
   console.log('=== cycle done ===')

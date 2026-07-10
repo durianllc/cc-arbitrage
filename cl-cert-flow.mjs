@@ -94,3 +94,45 @@ export async function addOneCert(page, { cert, grader = 'PSA' }, opts = {}) {
     return 'error'
   }
 }
+
+import { writeFileSync } from 'node:fs'
+
+/**
+ * Export the currently-active collection's CSV (gear → Export CSV) and save it.
+ * Accepts the native confirm() dialog handler must be set by the caller
+ * (page.on('dialog', d => d.accept())). Returns the saved path.
+ */
+export async function exportCollection(page, outPath) {
+  const exportBtn = page.locator('button:has-text("Export CSV")').first()
+  const gearBtn = page.locator('button:has(i.material-icons:has-text("settings"))').first()
+  for (let a = 0; a < 4; a++) {
+    if (await exportBtn.isVisible().catch(() => false)) break
+    await gearBtn.click({ timeout: 8000 }).catch(() => {})
+    await sleep(1500)
+  }
+  await exportBtn.waitFor({ state: 'visible', timeout: 8000 })
+
+  let captured = null
+  const onResp = async (resp) => {
+    if (captured) return
+    try {
+      const ct = resp.headers()['content-type'] || ''
+      const cd = resp.headers()['content-disposition'] || ''
+      if (!/csv|octet-stream/i.test(ct) && !/attachment/i.test(cd) && !/export|\.csv/i.test(resp.url())) return
+      const txt = (await resp.body()).toString('utf8')
+      if (/Date Purchased|Graded Cert|Current Value/i.test(txt)) captured = txt
+    } catch { /* attachment bodies may be unavailable */ }
+  }
+  page.on('response', onResp)
+
+  const dlPromise = page.waitForEvent('download', { timeout: 120000 }).catch(() => null)
+  await exportBtn.click({ timeout: 6000 })
+  const dl = await dlPromise
+  if (dl) { await dl.saveAs(outPath) }
+  else {
+    for (let i = 0; i < 30 && !captured; i++) await sleep(1000)
+    if (!captured) throw new Error('Export produced no download or CSV response.')
+    writeFileSync(outPath, captured)
+  }
+  return outPath
+}
