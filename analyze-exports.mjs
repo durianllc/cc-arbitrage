@@ -128,7 +128,11 @@ for (const f of files) {
       key: `${cert}|${m.grader}`,
       name: m.name, category: m.category, grader: m.grader, grade: m.grade,
       cc_price: m.cc_price, card_ladder_value: clValue, discount_pct: 1 - ratio,
-      cc_url: ccUrl(m.nft), cl_url: cache[`${cert}|${m.grader}`]?.clUrl ?? '',
+      cc_url: ccUrl(m.nft),
+      // Prefer a cached CL deep-link; otherwise a Card Ladder sales search for
+      // the card name so every deal has a clickable Card Ladder link.
+      cl_url: cache[`${cert}|${m.grader}`]?.clUrl
+        ?? `https://app.cardladder.com/sales-history?direction=desc&sort=date&search=${encodeURIComponent(m.name)}`,
     })
   }
 }

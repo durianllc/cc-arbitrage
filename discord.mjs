@@ -13,8 +13,8 @@
 // env var being set. A getter sidesteps the import-ordering hazard entirely.
 const webhook = () => process.env.DISCORD_WEBHOOK_URL
 
-// Discord allows up to 10 embeds per message.
-const PER_MSG = 10
+// One deal per message (not batched), so each is its own Discord message.
+const PER_MSG = 1
 
 function embedFor(r) {
   return {
