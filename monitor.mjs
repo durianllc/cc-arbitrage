@@ -29,6 +29,10 @@ const args = process.argv.slice(2)
 const numArg = (f, d) => { const i = args.indexOf(f); return i !== -1 ? Number(args[i + 1]) : d }
 const THRESH = numArg('--threshold', 0.8)
 const MAX_ADD = numArg('--max-add', 40)
+// Re-post an already-posted deal only if its discount % moved by at least this
+// much (default 0.01 = 1 percentage point, e.g. 20% → 21%). Prevents re-posting
+// the same unchanged deal every cycle.
+const MIN_PCT_CHANGE = numArg('--min-change', 0.01)
 const REFRESH_HOURS = numArg('--refresh-hours', 20) // re-export CL values at least this often
 const COLL = 'ARBALL'
 const CATS = ['Pokemon', 'One Piece']
@@ -134,18 +138,25 @@ async function main() {
     }
   }
 
-  // 4. Deals from new + changed certs.
+  // 4. Evaluate EVERY current listing against its CL value; the %-change dedup
+  //    below decides what to post — so a discount that shifts because the CC
+  //    price OR the CL value moved both get caught, and unchanged ones are skipped.
   const posted = loadJson(POSTED)
   const deals = []
-  for (const k of [...new Set([...newKeys, ...changedKeys])]) {
-    const cur = current[k]
+  for (const [k, cur] of Object.entries(current)) {
     const cl = clValues[cur.cert]
     if (cl == null) continue
     const ratio = cur.cc_price / cl
     if (ratio > THRESH) continue
+    const pct = 1 - ratio // current discount fraction
+    // Skip if we already posted this card at essentially the same discount %.
+    // Re-post when the % changed by ≥ MIN_PCT_CHANGE (either CC price or CL value moved).
     const prev = posted[k]
-    if (prev && cur.cc_price >= prev.cc_price * 0.98) continue // already posted, no meaningful drop
-    deals.push({ key: k, name: cur.name, category: cur.category, grader: cur.grader, grade: cur.grade, cc_price: cur.cc_price, card_ladder_value: cl, discount_pct: 1 - ratio, cc_url: ccUrl(cur.nft), cl_url: clUrl(cur.name) })
+    if (prev && prev.cl_value > 0) {
+      const prevPct = 1 - prev.cc_price / prev.cl_value
+      if (Math.abs(pct - prevPct) < MIN_PCT_CHANGE) continue
+    }
+    deals.push({ key: k, name: cur.name, category: cur.category, grader: cur.grader, grade: cur.grade, cc_price: cur.cc_price, card_ladder_value: cl, discount_pct: pct, cc_url: ccUrl(cur.nft), cl_url: clUrl(cur.name) })
   }
   deals.sort((a, b) => b.discount_pct - a.discount_pct)
   console.log(`${deals.length} deal(s) to post${firstRun ? ' (suppressed on first run)' : ''}.`)
