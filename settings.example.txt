@@ -1,5 +1,8 @@
 # Rename this file to settings.txt and fill in your values.
 # One KEY=VALUE per line. Lines starting with # are ignored.
 
-# Discord webhook — Server Settings → Integrations → Webhooks → New Webhook → Copy URL
+# Discord webhooks. Deals route by CC price: < $200 → LOW, >= $200 → HIGH.
+# DISCORD_WEBHOOK_URL is used as a fallback if a LOW/HIGH one is missing.
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/XXXX/YYYY
+DISCORD_WEBHOOK_LOW=https://discord.com/api/webhooks/XXXX/LOW
+DISCORD_WEBHOOK_HIGH=https://discord.com/api/webhooks/XXXX/HIGH
