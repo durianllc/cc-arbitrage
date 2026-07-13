@@ -12,7 +12,9 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const INTERVAL_MS = 15 * 60 * 1000
+// Minutes between cycles (default 5). Override with INTERVAL_MIN env var.
+const INTERVAL_MIN = Number(process.env.INTERVAL_MIN) || 5
+const INTERVAL_MS = INTERVAL_MIN * 60 * 1000
 const extra = process.argv.slice(2)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -28,6 +30,6 @@ console.log(`monitor-loop started — every ${INTERVAL_MS / 60000} min. Ctrl+C t
 // eslint-disable-next-line no-constant-condition
 while (true) {
   const code = await runOnce()
-  console.log(`--- cycle exited (${code}); sleeping 15 min at ${new Date().toISOString()} ---`)
+  console.log(`--- cycle exited (${code}); sleeping ${INTERVAL_MIN} min at ${new Date().toISOString()} ---`)
   await sleep(INTERVAL_MS)
 }
